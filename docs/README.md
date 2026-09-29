@@ -57,8 +57,9 @@
 
 **已就绪**：`00`–`09` 十份文档全部成形（本目录共 11 个文件含本索引）。
 
-**下一步（P0，约 3 天）**：按 `04-ROADMAP.md` §二 P0 建仓库骨架、锁依赖版本、`shared` 模块空跑、Detekt 边界规则、CI、`design/tokens.json` 生成、密钥纪律。
-> ⚠️ 仓库目前**尚未 `git init`**，没有任何提交基线——动手第一件事就是建立它。
+**下一步（P0）**：按 `04-ROADMAP.md` §二 P0 建仓库骨架、锁依赖版本、`shared` 模块空跑、Detekt 边界规则、本地 verify 门禁、`design/tokens.json` 生成、密钥纪律。
+> ⚠️ 仓库尚未配置任何 git 远端（只有本机提交），所以**云端 CI 暂不可用**；本地 verify 是当前门禁。新仓库建好后需回填远端并启用 CI。
+> 当前进度：P0 第 1 项（工具链基线 + 三 target 编译 + KMP→JS 可被 TS 调用）已实测通过。
 
 **已知待决策（不阻塞 P0）**：
 1. `06-NATIVE-ANDROID.md` §9：`:remote` 推理进程、系统闹钟写入口径、前台服务类型（`specialUse` vs `dataSync`）。
