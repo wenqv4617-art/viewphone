@@ -28,7 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -225,13 +224,22 @@ private fun AppEntry(
                     .background(tileBg),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    painter = painterResource(app.icon),
-                    contentDescription = app.label,
-                    modifier = Modifier.size(30.dp),
-                    tint = iconTint ?: Color.Unspecified,
-                    colorFilter = iconTint?.let { ColorFilter.tint(it) },
-                )
+                if (iconTint != null) {
+                    // 未实现：整体灰显（用 tint 覆盖矢量图自带颜色）
+                    Icon(
+                        painter = painterResource(app.icon),
+                        contentDescription = app.label,
+                        modifier = Modifier.size(30.dp),
+                        tint = iconTint,
+                    )
+                } else {
+                    // 已实现：保留矢量图自身颜色（各入口的深色字色）
+                    Icon(
+                        painter = painterResource(app.icon),
+                        contentDescription = app.label,
+                        modifier = Modifier.size(30.dp),
+                    )
+                }
             }
             if (unread > 0) {
                 Box(
@@ -290,12 +298,20 @@ private fun Dock(onOpenApp: (DesktopApp) -> Unit) {
                         .clickable { if (app.implemented) onOpenApp(app) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        painter = painterResource(app.icon),
-                        contentDescription = app.label,
-                        modifier = Modifier.size(28.dp),
-                        tint = if (app.implemented) Color.Unspecified else VpColors.TileDisabledInk,
-                    )
+                    if (app.implemented) {
+                        Icon(
+                            painter = painterResource(app.icon),
+                            contentDescription = app.label,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    } else {
+                        Icon(
+                            painter = painterResource(app.icon),
+                            contentDescription = app.label,
+                            modifier = Modifier.size(28.dp),
+                            tint = VpColors.TileDisabledInk,
+                        )
+                    }
                 }
             }
         }

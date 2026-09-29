@@ -174,6 +174,59 @@
 
 ---
 
+## DEC-019｜Android 应用工具链版本链条（**硬链条，不能只升其一**）
+
+- **日期**：第 1 轮（出可用 APK）
+- **状态**：已生效
+- **背景**：androidApp 首次构建连续失败三次，每次报错都指向版本链条的下一环。
+- **实测得出的依赖链**：
+
+```
+Compose BOM 2026.09.00  →  要求 compileSdk ≥ 37（成员 animation-core 1.12.1 明确要求）
+compileSdk 37           →  要求 AGP ≥ 9.1.0（AGP 9.0.1 的"最高推荐 compileSdk"是 36）
+AGP 9.4.1               →  要求 Gradle ≥ 9.6.0
+```
+
+- **三次报错原文（摘）**：
+  1. `Dependency 'androidx.compose.animation:animation-core-android:1.12.1' requires ... compile against version 37 or later` +
+     `requires Android Gradle plugin 9.1.0 or higher`（`checkDebugAarMetadata` 一次报 22 条）
+  2. AGP 9.4.1：`Minimum supported Gradle version is 9.6.0. Current version is 9.3.0.`
+- **结论（本仓库锁定的组合）**：
+
+| 组件 | 版本 |
+| :--- | :--- |
+| Gradle | **9.6.0**（wrapper 锁定） |
+| AGP | **9.4.1** |
+| Kotlin | 2.4.20 |
+| compileSdk / targetSdk / minSdk | **37 / 37 / 26** |
+| Compose BOM | 2026.09.00 |
+
+- **连带必须记住的一条**：**不要应用 `org.jetbrains.kotlin.android`**。
+  AGP 9 内置 Kotlin 支持，两者同时应用会直接失败：
+  `Failed to apply plugin 'org.jetbrains.kotlin.android' ... Remove the plugin`。
+  这与 DEC-010 记录的 KMP 情形同源（都是 AGP 9 的 built-in Kotlin）。
+- **本机额外动作**：手工安装了 `platforms/android-37`（`platform-37.1_r01.zip`），
+  因为本机原本只有 34/36/36.1。CI 里改为 `sdkmanager --install "platforms;android-37"`。
+- **复查点**：升级其中任意一个版本时，必须按链条**自下而上**重验（Gradle → AGP → compileSdk → Compose BOM）。
+
+## DEC-020｜APK 构建以 **GitHub Actions 为准**（本机构建受版本链限制）
+
+- **日期**：第 1 轮
+- **状态**：已生效
+- **背景**：本机 Android SDK 只有 34/36/36.1，且 Gradle/AGP 需要升级才能满足 Compose 要求；
+  在一台机器上反复调版本链条成本高。
+- **结论**：
+  1. 公开仓库：**https://github.com/wenqv4617-art/viewphone**（`gh` 未登录，用 REST API + PAT 创建）；
+  2. 工作流 `.github/workflows/build-apk.yml`：`sdkmanager` 装 platform 36/37 → `:androidApp:assembleDebug` → 上传 APK；
+  3. **产物保留 1 天**（`retention-days: 1`，用户明确要求）；
+  4. 本机仍保留构建能力（已装 platform 37），但**以云端产物为准**。
+- **安全说明**：GitHub PAT **只写入** `.buildlogs/.gh-token`（已 gitignore）与
+  `%USERPROFILE%\.viewphone-github-token`，**不入仓库、不进日志**。
+  token 曾出现在对话中，**已提醒用户撤销并重发**。
+- **复查点**：token 轮换后只需更新上述两个本地文件；不要把 token 写进任何被跟踪的文件。
+
+---
+
 ## DEC-001｜配置缓存默认开启（`org.gradle.configuration-cache=true`）
 
 - **日期**：P0 第 1 天
