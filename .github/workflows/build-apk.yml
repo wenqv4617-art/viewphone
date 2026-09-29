@@ -59,24 +59,37 @@ jobs:
           echo "$CMDLINE" >> "$GITHUB_PATH"
           "$CMDLINE/sdkmanager" --version
 
-      # 声明式安装所需的 platform / build-tools（与本地同一条命令）
+      # 声明式安装所需的 platform / build-tools
+      # 实测教训：Google 从 API 36.1 起把 platform 包名改成**带次版本号**，
+      #   `platforms;android-37`   ← 不存在（我照此推了四次 CI，全失败）
+      #   `platforms;android-37.0` ← 真实包名
       - name: 安装 platforms 与 build-tools
         run: |
           set -e
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          # 关键：runner 预装的 sdkmanager 元数据可能过旧，不认识较新的 platform。
-          # 必须先 --update 刷新包列表，否则会报 "Failed to find package 'platforms;android-37'"（实测）。
           sdkmanager --update > /dev/null 2>&1 || true
-          sdkmanager --install "platforms;android-37" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
-          echo "--- 已安装 ---"
-          ls -1 "$ANDROID_HOME/platforms"
-          ls -1 "$ANDROID_HOME/build-tools"
+          echo "=== 包名可用性预检（只查不装）==="
+          sdkmanager --list 2>/dev/null | grep -E "platforms;android-3[67]" | head -20 || true
+          echo "=== 开始安装 ==="
+          sdkmanager --install "platforms;android-37.0" "platforms;android-36" "build-tools;36.0.0" "build-tools;37.0.0" "platform-tools"
+          echo "=== 安装后实际内容 ==="
+          ls -1 "$ANDROID_HOME/platforms" || true
+          ls -1 "$ANDROID_HOME/build-tools" || true
 
       - name: 校验 Android 环境
         run: |
           set -e
-          test -f "$ANDROID_HOME/platforms/android-37/source.properties" || (echo "android-37 未安装" && exit 1)
-          grep -E '^AndroidVersion.ApiLevel=' "$ANDROID_HOME/platforms/android-37/source.properties"
+          echo "platforms 目录:"
+          ls -1 "$ANDROID_HOME/platforms"
+          # 不写死目录名（36.1 起可能是 android-37 或 android-37.0）；只要有一个 ApiLevel≥37 即可
+          found=""
+          for f in "$ANDROID_HOME"/platforms/*/source.properties; do
+            api=$(grep -E '^AndroidVersion.ApiLevel=' "$f" | cut -d= -f2)
+            echo "  $(dirname "$f" | xargs basename): ApiLevel=$api"
+            case "$api" in 37*) found="$f" ;; esac
+          done
+          if [ -z "$found" ]; then echo "✗ 没有 ApiLevel 37 的 platform"; exit 1; fi
+          echo "✓ 找到 37 平台: $found"
 
       - name: 缓存 Gradle
         uses: actions/cache@v4
