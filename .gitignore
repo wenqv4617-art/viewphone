@@ -51,6 +51,14 @@ web/.kernel/
 # 体积测量的临时产物
 web/probe-web/.bundle-out/
 
+# ---- 设计探索产物（不入库）----
+# 出稿过程中的失败/中间图，留本地备查
+design/samples/_failed/
+design/samples/_archive/
+# 设计稿的临时验证图（以 _ 开头的是过程产物，不是交付物）
+design/samples/**/_*.png
+design/samples/desktop/_*.png
+
 # pnpm 的 lockfile（pnpm-lock.yaml）必须入库以保证可复现安装，
 # 这里只排除本地缓存目录，不排除 lockfile。
 

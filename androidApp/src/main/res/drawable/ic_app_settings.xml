@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置：齿轮（圆 + 八齿）｜24 栅格 · 线宽 1.75 · round -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M12,9 a3,3 0 1,0 0.01,0z"
+        android:strokeColor="#4A5261" android:strokeWidth="1.75" android:fillColor="#00000000" />
+    <path android:pathData="M12,2.8v2.4M12,18.8v2.4M21.2,12h-2.4M5.2,12H2.8M18.5,5.5l-1.7,1.7M7.2,16.8l-1.7,1.7M18.5,18.5l-1.7-1.7M7.2,7.2L5.5,5.5"
+        android:strokeColor="#4A5261" android:strokeWidth="1.75" android:strokeLineCap="round" />
+    <path android:pathData="M12,7.2 a4.8,4.8 0 1,0 0.01,0z"
+        android:strokeColor="#4A5261" android:strokeWidth="1.75" android:fillColor="#00000000" />
+</vector>

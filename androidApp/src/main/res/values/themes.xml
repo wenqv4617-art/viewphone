@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  应用主题：只作为 Compose 的宿主壳，真正的视觉在 Compose 主题里（core:ui 生成物）。
+  窗口背景用设计 tokens 的 bg-base（冷灰 #F5F6F8），避免启动瞬间闪白/闪黑。
+-->
+<resources>
+    <style name="Theme.ViewPhone" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/vp_bg_base</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

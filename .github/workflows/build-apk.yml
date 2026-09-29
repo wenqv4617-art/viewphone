@@ -1,0 +1,86 @@
+# ============================================================
+# 微光机 ViewPhone · 构建 debug APK
+#
+# 为什么用云端构建：本机构建 APK 受 AGP/SDK/版本组合限制（记录见 docs/CI-STATUS.md），
+# 云端 runner 环境干净且可以自由装 SDK platform，因此**以本工作流为准**。
+#
+# 产物保留：**1 天**（用户明确要求）。
+# ============================================================
+name: build-apk
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 与本地一致：JDK 21
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 安装 Android SDK 工具
+        uses: android-actions/setup-android@v3
+
+      # 声明式安装所需 platform（与本地同一条命令；不允许手工解压）
+      - name: 安装 platforms;android-36 与 android-37
+        run: |
+          sdkmanager --install "platforms;android-36" "platforms;android-37" "build-tools;36.0.0"
+          sdkmanager --list_installed | head -40
+
+      - name: 校验 Android 环境
+        run: |
+          test -n "$ANDROID_HOME" || (echo "ANDROID_HOME 未设置" && exit 1)
+          ls "$ANDROID_HOME/platforms"
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.gradle/nodejs
+          key: gradle-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: 构建 debug APK
+        run: ./gradlew :androidApp:assembleDebug --console=plain --no-daemon
+
+      - name: 显示产物
+        if: always()
+        run: |
+          find androidApp/build/outputs -type f -name '*.apk' -exec ls -lh {} \;
+
+      - name: 上传 APK（保留 1 天）
+        uses: actions/upload-artifact@v4
+        with:
+          name: viewphone-debug-apk
+          path: androidApp/build/outputs/apk/debug/*.apk
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: 失败时上传构建日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            androidApp/build/reports/
+            **/build/outputs/logs/*.txt
+          retention-days: 1
+          if-no-files-found: ignore

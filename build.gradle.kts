@@ -4,12 +4,15 @@
 // ============================================================
 
 plugins {
+    alias(libs.plugins.android.application) apply false
     alias(libs.plugins.android.library) apply false
     // AGP 9 已经把该插件带上 classpath；在根项目声明一次（apply false）以固定版本，
     // 子模块只写 `id(...)` 不带版本，否则会报
     // "plugin is already on the classpath with an unknown version"（见 DEC-010）。
     alias(libs.plugins.android.kmp.library) apply false
     alias(libs.plugins.kotlin.jvm) apply false
+    alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.kotlin.multiplatform) apply false
 }
 

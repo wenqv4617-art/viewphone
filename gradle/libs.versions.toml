@@ -10,28 +10,60 @@
 # ---- 构建工具链（B3 口径：以「本机首次构建成功」为准）----
 # Gradle 版本在 gradle/wrapper/gradle-wrapper.properties 中锁定（9.3.0，本机已有缓存）
 # 实测证据见 docs/P0-TOOLCHAIN-BASELINE.md
-agp = "9.0.1"                     # Android Gradle Plugin（已验证：:probe-android:assembleDebug 通过）
+agp = "9.4.1"                     # Android Gradle Plugin
+# 为什么从 9.0.1 升到 9.4.1（实测记录）：
+#   Compose BOM 2026.09.00 的成员要求 compileSdk ≥ 37 且 AGP ≥ 9.1.0；
+#   而 AGP 9.0.1 的"最高推荐 compileSdk"是 36 —— 两者硬冲突（checkDebugAarMetadata 报 22 条）。
+#   升到 9.4.1 后才支持 compileSdk 37。本机已装 platforms/android-37。
 kotlin = "2.4.20"                 # Kotlin / KMP（已验证：Kotlin JVM 插件编译 + 单测通过）
 
 # ---- 测试 ----
 junit-jupiter = "6.1.3"           # 已验证：:probe-jvm:test 产出 XML tests=1 failures=0
 
+# ---- Android 应用（androidApp）----
+# 全部版本已实测可达（HEAD 200，见本轮汇报）。加入后必须当场跑通构建才算生效。
+androidx-core = "1.17.0"
+androidx-activity = "1.11.0"
+androidx-lifecycle = "2.9.4"
+compose-bom = "2026.09.00"        # Compose BOM 统一版本，成员不单独写版本
+androidx-security-crypto = "1.1.0" # API Key 本机加密（Android Keystore）
+
 # ---- Android 与 SDK ----
 # compileSdk / minSdk 见各模块 build.gradle.kts（P0 探针取 compileSdk=36 / minSdk=26）
-# 尚未加入的依赖（Compose BOM / Room / Ktor / Coroutines / Serialization 等）
-# 一律等到对应阶段真正需要时再加，并当场实测 —— 不预先写一堆没验证过的版本号。
+# 尚未加入的依赖（Room / Ktor / Serialization 等）在真正需要时再加并当场实测。
 
 [libraries]
 # 测试：JUnit 5（JVM 侧）
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version = "6.1.3" }
 
+# Android 应用基础
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidx-lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle" }
+# API Key 加密存储
+androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidx-security-crypto" }
+
+# Compose（BOM 统一版本）
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+compose-material-icons = { module = "androidx.compose.material:material-icons-core" }
+
 [plugins]
-# 只列 P0 真实应用过的插件；其余（Detekt / Compose 等）在引入时再加。
+# 只列真实应用过的插件；其余（Detekt 等）在引入时再加。
+android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 # KMP 的 Android target 专用插件（AGP 9 起取代 `com.android.library` + `androidTarget()`
 # 的旧组合，见 docs/DECISIONS.md DEC-010）
 android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
-# KMP：shared 模块使用（P0 先只开 jvm target，见 shared/build.gradle.kts 的分步策略）
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# Compose 编译器插件（Kotlin 2.x 起必须显式应用）
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+# KMP：shared 模块使用
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

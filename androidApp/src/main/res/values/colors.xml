@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  由 design/tokens.json 生成，勿手改。
+  生成器：tools/design/gen-theme.mjs ｜ 单一事实源：design/tokens.json
+-->
+<resources>
+    <color name="vp_bg_base">#F5F6F8</color>
+    <color name="vp_bg_surface">#FFFFFF</color>
+    <color name="vp_text_primary">#1B1F27</color>
+    <color name="vp_accent">#3B6FE0</color>
+</resources>

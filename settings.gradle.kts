@@ -44,10 +44,13 @@ dependencyResolutionManagement {
 
 rootProject.name = "viewphone"
 
-// ---- 模块清单（P0 逐步加入）----
+// ---- 模块清单（按需创建：用到哪个建哪个，不预先铺空骨架）----
 
-// 共享内核：唯一实现，两端共用（CRITICAL §3.1）。P0 只开 jvm target。
+// 共享内核：唯一实现，两端共用（CRITICAL §3.1）。jvm / js / android 三 target 均已通过。
 include(":shared")
+
+// Android 应用外壳（主端）
+include(":androidApp")
 
 // ⚠️ 非生产模块：仅用于验证工具链真实可用，不承载业务，不参与交付包。
 //    生产模块禁止依赖它（根 build.gradle.kts 强制校验）。
