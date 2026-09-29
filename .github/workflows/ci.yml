@@ -1,13 +1,13 @@
 # ============================================================
-# 微光机 ViewPhone · 门禁 CI（等价于本地 `pnpm verify`）
+# 微光机 ViewPhone · Android 门禁
 #
-# 与本地同源：同一个入口 `tools/verify/verify.mjs`，同样的关卡顺序。
-# 唯一差别：CI 上必须显式准备 Android 工具链。
+# 为什么不查 web 侧：当前阶段只做 Android 主端，web/ 尚未开工。
+# 让 CI 去跑未开工目录的检查 = 长期红灯 = 噪音。等 web 真正开工时再加 web 关卡。
 #
 # 实测教训（别改回去）：
 #   ❌ android-actions/setup-android@v3 会去装已被移除的 `tools` 包 → exit 1
 #   ❌ `platforms;android-37` 不存在（API 36.1 起包名带次版本号）→ 用 `platforms;android-37.0`
-#   ❌ `gradlew` 缺可执行位 → Linux 上 Permission denied (exit 126)，需 git update-index --chmod=+x
+#   ❌ `gradlew` 缺可执行位 → Linux 上 Permission denied (exit 126)
 #   ❌ 校验步骤不能排在安装之前（fresh runner 上必然失败）
 # ============================================================
 name: ci
@@ -24,9 +24,10 @@ permissions:
 env:
   ANDROID_HOME: /usr/local/lib/android/sdk
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
 
 jobs:
-  verify:
+  android-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -39,16 +40,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: 安装 Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 12.6.0
 
       - name: 探测 Android SDK 与 sdkmanager
         run: |
@@ -66,22 +57,17 @@ jobs:
           set -e
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager --update > /dev/null 2>&1 || true
-          # 真实包名：platforms;android-37.0（`platforms;android-37` 不存在）
-          sdkmanager --install "platforms;android-37.0" "platforms;android-36" "build-tools;36.0.0" "build-tools;37.0.0" "platform-tools"
-          echo "=== 安装后实际内容 ==="
+          sdkmanager --install "platforms;android-37.0" "build-tools;36.0.0" "build-tools;37.0.0" "platform-tools"
           for f in "$ANDROID_HOME"/platforms/*/source.properties; do
             echo "  $(dirname "$f" | xargs basename): $(grep -E '^AndroidVersion.ApiLevel=' "$f")"
           done
-          ls -1 "$ANDROID_HOME/build-tools"
 
-      # 校验必须排在安装之后
-      - name: 校验 Android 环境
+      - name: 校验 Android 环境（必须在安装之后）
         run: |
           set -e
           found=""
           for f in "$ANDROID_HOME"/platforms/*/source.properties; do
             api=$(grep -E '^AndroidVersion.ApiLevel=' "$f" | cut -d= -f2)
-            echo "  $(dirname "$f" | xargs basename): ApiLevel=$api"
             case "$api" in 37*) found="$f" ;; esac
           done
           if [ -z "$found" ]; then echo "没有 ApiLevel 37 的 platform"; exit 1; fi
@@ -98,24 +84,22 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      - name: 缓存 pnpm
-        uses: actions/cache@v4
-        with:
-          path: ~/.pnpm-store
-          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: 编译
+        run: ./gradlew :androidApp:assembleDebug --console=plain
 
-      - name: 安装 Web 依赖
-        run: pnpm install --frozen-lockfile
+      - name: 单元测试
+        run: ./gradlew test --console=plain
 
-      # 单一入口：与本地 `pnpm verify` 完全同一套关卡
-      - name: 门禁（编译 + 双单测 + 内核 + TS 类型 + 真实调用 + 仓库膨胀）
-        run: pnpm verify
+      - name: 仓库膨胀门禁（产物/依赖/缓存不得入库）
+        run: node tools/ci/check-repo-bloat.mjs
 
       - name: 失败时上传日志
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: verify-logs
-          path: .buildlogs/verify/
+          name: android-verify-logs
+          path: |
+            .buildlogs/
+            androidApp/build/reports/
           retention-days: 1
           if-no-files-found: ignore

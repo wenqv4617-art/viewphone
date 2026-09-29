@@ -23,8 +23,28 @@ android {
         applicationId = "com.viewphone.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0-p0"
+        // 每次发新版都必须 +1，否则系统不允许覆盖安装更新
+        versionCode = 2
+        versionName = "0.2.0-p1"
+    }
+
+    /**
+     * 固定签名（重要：这是"能覆盖安装"的关键）。
+     *
+     * 为什么把 keystore 提交进仓库：
+     *  - 之前用 AGP 自动生成的 debug 签名，**每台机器/每次 CI 构建都不同**，
+     *    导致用户已安装的包无法被新包覆盖（INSTALL_FAILED_UPDATE_INCOMPATIBLE）。
+     *  - 提交一个**固定口令的 debug keystore** 后，所有构建签名一致，可直接覆盖安装。
+     *  - 口令 `android` 是公开的、且仅用于 debug 包；**正式发布签名必须走 CI Secret**，
+     *    不得复用这份（见宪法 §三.6）。
+     */
+    signingConfigs {
+        create("fixedDebug") {
+            storeFile = file("viewphone-debug.keystore")
+            storePassword = "android"
+            keyAlias = "viewphone"
+            keyPassword = "android"
+        }
     }
 
     buildFeatures {
@@ -38,8 +58,14 @@ android {
 
     buildTypes {
         debug {
-            // 第 1 轮只出 debug 包；release 签名走 CI Secret（尚未接）
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("fixedDebug")
+        }
+        release {
+            isMinifyEnabled = false
+            // 暂时复用固定 debug 签名，保证"同一份包能互相覆盖安装"；
+            // 正式上架前替换为 CI Secret 里的 release 签名。
+            signingConfig = signingConfigs.getByName("fixedDebug")
         }
     }
 }

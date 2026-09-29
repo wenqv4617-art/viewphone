@@ -8,14 +8,13 @@ import kotlinx.serialization.json.Json
 import java.util.UUID
 
 /**
- * 第 1 轮的持久化：JSON + SharedPreferences。
+ * 持久化：JSON + SharedPreferences。
  *
- * 为什么不直接上 Room：本轮数据规模是"几十条角色 / 几百条消息"，
- * Room 带来的 KSP + 迁移成本超过收益（"用到哪个建哪个"）。
- * 消息量上万需要游标分页时再换，字段名不变，迁移路径清晰（见 Models.kt 注释）。
+ * 为什么不直接上 Room：本阶段数据规模是"几十条角色 / 几百条消息"，
+ * Room 的 KSP + 迁移成本超过收益（"用到哪个建哪个"）。
+ * 消息量上万、需要游标分页时再换，字段名不变，迁移路径清晰。
  *
- * 并发：所有写操作串行化在同一把锁内，内部持有内存态并以 StateFlow 广播，
- * 调用方（ViewModel）直接 collect 即可，不需要手动刷新。
+ * 并发：写操作串行化；内部持有内存态并以 StateFlow 广播，UI 直接 collect，无需手动刷新。
  */
 class Store(context: Context) {
 
@@ -24,19 +23,27 @@ class Store(context: Context) {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
-
     private val lock = Any()
 
-    private val _presets = MutableStateFlow(loadPresets())
+    private val _presets = MutableStateFlow(load<ApiPreset>(KEY_PRESETS))
     val presets: StateFlow<List<ApiPreset>> = _presets.asStateFlow()
 
-    private val _characters = MutableStateFlow(loadCharacters())
+    private val _users = MutableStateFlow(load<UserProfile>(KEY_USERS))
+    val users: StateFlow<List<UserProfile>> = _users.asStateFlow()
+
+    private val _characters = MutableStateFlow(load<Character>(KEY_CHARACTERS))
     val characters: StateFlow<List<Character>> = _characters.asStateFlow()
 
-    private val _conversations = MutableStateFlow(loadConversations())
+    private val _conversations = MutableStateFlow(load<Conversation>(KEY_CONVERSATIONS))
     val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
 
     // ---------------- API 预设 ----------------
+
+    fun presetsOf(kind: ServiceKind): List<ApiPreset> = _presets.value.filter { it.kindEnum == kind }
+
+    /** 只保留该用途可用的协议（UI 用它过滤下拉项，避免"看起来支持"的假选项）。 */
+    fun protocolsFor(kind: ServiceKind): List<ApiProtocol> =
+        ApiProtocol.entries.filter { kind in it.kinds }
 
     fun upsertPreset(preset: ApiPreset) {
         synchronized(lock) {
@@ -52,15 +59,60 @@ class Store(context: Context) {
         synchronized(lock) {
             _presets.value = _presets.value.filterNot { it.id == id }
             write(KEY_PRESETS, _presets.value)
-            // 解绑引用了该预设的角色，避免悬空引用
-            val updated = _characters.value.map { if (it.apiPresetId == id) it.copy(apiPresetId = null) else it }
-            _characters.value = updated
-            write(KEY_CHARACTERS, updated)
+            // 解绑引用，避免悬空
+            val cs = _characters.value.map {
+                it.copy(
+                    apiPresetId = it.apiPresetId.takeIf { p -> p != id },
+                    ttsPresetId = it.ttsPresetId.takeIf { p -> p != id },
+                    imagePresetId = it.imagePresetId.takeIf { p -> p != id },
+                )
+            }
+            _characters.value = cs
+            write(KEY_CHARACTERS, cs)
         }
     }
 
-    fun presetById(id: String?): ApiPreset? =
-        if (id == null) _presets.value.firstOrNull() else _presets.value.firstOrNull { it.id == id }
+    fun presetById(id: String?): ApiPreset? = id?.let { pid -> _presets.value.firstOrNull { it.id == pid } }
+
+    /** 文本类预设未显式绑定时，退回到第一套文本预设。 */
+    fun defaultTextPreset(): ApiPreset? = presetsOf(ServiceKind.TEXT).firstOrNull()
+
+    // ---------------- 用户（面具） ----------------
+
+    fun upsertUser(user: UserProfile) {
+        synchronized(lock) {
+            val list = _users.value.toMutableList()
+            val idx = list.indexOfFirst { it.id == user.id }
+            if (idx >= 0) list[idx] = user else list.add(user)
+            // 单选：当前生效的用户唯一
+            val normalized = if (user.isActive) {
+                list.map { if (it.id == user.id) it else it.copy(isActive = false) }
+            } else list
+            _users.value = normalized
+            write(KEY_USERS, normalized)
+        }
+    }
+
+    fun deleteUser(id: String) {
+        synchronized(lock) {
+            _users.value = _users.value.filterNot { it.id == id }
+            write(KEY_USERS, _users.value)
+        }
+    }
+
+    /** 设为当前生效用户（单选）。 */
+    fun activateUser(id: String) {
+        synchronized(lock) {
+            val list = _users.value.map { it.copy(isActive = it.id == id) }
+            _users.value = list
+            write(KEY_USERS, list)
+        }
+    }
+
+    val activeUser: UserProfile?
+        get() = _users.value.firstOrNull { it.isActive } ?: _users.value.firstOrNull()
+
+    fun userById(id: String?): UserProfile? = id?.let { uid -> _users.value.firstOrNull { it.id == uid } }
 
     // ---------------- 角色 ----------------
 
@@ -78,25 +130,50 @@ class Store(context: Context) {
         synchronized(lock) {
             _characters.value = _characters.value.filterNot { it.id == id }
             write(KEY_CHARACTERS, _characters.value)
+            // 会话里也移除该角色；会话空掉则删除会话
+            val convs = _conversations.value.mapNotNull { c ->
+                val rest = c.characterIds.filterNot { it == id }
+                when {
+                    rest.isEmpty() -> null
+                    else -> c.copy(characterIds = rest, isGroup = rest.size > 1)
+                }
+            }
+            _conversations.value = convs
+            write(KEY_CONVERSATIONS, convs)
         }
     }
 
-    fun characterById(id: String): Character? = _characters.value.firstOrNull { it.id == id }
+    fun characterById(id: String?): Character? = id?.let { cid -> _characters.value.firstOrNull { it.id == cid } }
 
     // ---------------- 会话与消息 ----------------
 
-    fun conversationFor(characterId: String): Conversation {
+    fun createConversation(userId: String, characterIds: List<String>): Conversation? {
+        if (userId.isBlank() || characterIds.isEmpty()) return null
+        val title = if (characterIds.size == 1) {
+            characterById(characterIds.first())?.name.orEmpty()
+        } else {
+            characterIds.mapNotNull { characterById(it)?.name }.joinToString("、").take(20)
+        }
+        val conv = Conversation(
+            id = UUID.randomUUID().toString(),
+            userId = userId,
+            characterIds = characterIds,
+            isGroup = characterIds.size > 1,
+            title = title.ifBlank { "新会话" },
+            lastMessageAt = System.currentTimeMillis(),
+        )
         synchronized(lock) {
-            _conversations.value.firstOrNull { it.characterId == characterId }?.let { return it }
-            val conv = Conversation(
-                id = UUID.randomUUID().toString(),
-                characterId = characterId,
-                title = characterById(characterId)?.name.orEmpty(),
-                lastMessageAt = System.currentTimeMillis(),
-            )
             _conversations.value = _conversations.value + conv
             write(KEY_CONVERSATIONS, _conversations.value)
-            return conv
+        }
+        return conv
+    }
+
+    fun deleteConversation(id: String) {
+        synchronized(lock) {
+            _conversations.value = _conversations.value.filterNot { it.id == id }
+            write(KEY_CONVERSATIONS, _conversations.value)
+            prefs.edit().remove(KEY_MESSAGES_PREFIX + id).apply()
         }
     }
 
@@ -110,22 +187,20 @@ class Store(context: Context) {
         }
     }
 
-    fun messages(conversationId: String): List<Message> = loadMessages(conversationId)
+    fun messages(conversationId: String): List<Message> = load(KEY_MESSAGES_PREFIX + conversationId)
 
     fun appendMessage(message: Message) {
         synchronized(lock) {
-            val list = loadMessages(message.conversationId).toMutableList()
+            val list = load<Message>(KEY_MESSAGES_PREFIX + message.conversationId).toMutableList()
             list.add(message)
             write(KEY_MESSAGES_PREFIX + message.conversationId, list)
 
-            // 同步会话摘要
             val convList = _conversations.value.toMutableList()
             val idx = convList.indexOfFirst { it.id == message.conversationId }
             if (idx >= 0) {
-                val preview = message.text.replace('\n', ' ').take(40)
                 convList[idx] = convList[idx].copy(
                     lastMessageAt = message.timestamp,
-                    lastMessagePreview = preview,
+                    lastMessagePreview = message.text.replace('\n', ' ').take(40),
                 )
                 _conversations.value = convList
                 write(KEY_CONVERSATIONS, convList)
@@ -133,19 +208,17 @@ class Store(context: Context) {
         }
     }
 
-    /** 重新生成用：删除某会话最后一条角色消息。 */
     fun dropLastCharMessage(conversationId: String) {
         synchronized(lock) {
-            val list = loadMessages(conversationId).toMutableList()
-            val lastCharIdx = list.indexOfLast { it.sender == Sender.CHAR }
-            if (lastCharIdx >= 0) {
-                list.removeAt(lastCharIdx)
+            val list = load<Message>(KEY_MESSAGES_PREFIX + conversationId).toMutableList()
+            val idx = list.indexOfLast { it.sender == Sender.CHAR }
+            if (idx >= 0) {
+                list.removeAt(idx)
                 write(KEY_MESSAGES_PREFIX + conversationId, list)
             }
         }
     }
 
-    /** 清空某个会话的历史。 */
     fun clearMessages(conversationId: String) {
         synchronized(lock) {
             write(KEY_MESSAGES_PREFIX + conversationId, emptyList<Message>())
@@ -161,12 +234,7 @@ class Store(context: Context) {
 
     // ---------------- 内部 ----------------
 
-    private fun loadPresets(): List<ApiPreset> = read(KEY_PRESETS)
-    private fun loadCharacters(): List<Character> = read(KEY_CHARACTERS)
-    private fun loadConversations(): List<Conversation> = read(KEY_CONVERSATIONS)
-    private fun loadMessages(conversationId: String): List<Message> = read(KEY_MESSAGES_PREFIX + conversationId)
-
-    private inline fun <reified T> read(key: String): List<T> {
+    private inline fun <reified T> load(key: String): List<T> {
         val raw = prefs.getString(key, null) ?: return emptyList()
         return runCatching { json.decodeFromString<List<T>>(raw) }.getOrElse { emptyList() }
     }
@@ -176,9 +244,10 @@ class Store(context: Context) {
     }
 
     private companion object {
-        const val KEY_PRESETS = "api_presets"
-        const val KEY_CHARACTERS = "characters"
-        const val KEY_CONVERSATIONS = "conversations"
-        const val KEY_MESSAGES_PREFIX = "messages_"
+        const val KEY_PRESETS = "api_presets_v2"
+        const val KEY_USERS = "users_v1"
+        const val KEY_CHARACTERS = "characters_v2"
+        const val KEY_CONVERSATIONS = "conversations_v2"
+        const val KEY_MESSAGES_PREFIX = "messages_v2_"
     }
 }

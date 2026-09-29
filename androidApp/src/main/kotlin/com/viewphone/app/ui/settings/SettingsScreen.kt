@@ -36,7 +36,7 @@ import com.viewphone.app.ui.theme.VpColors
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenApiConfig: () -> Unit = {},
-    onOpenCharacters: () -> Unit = {},
+    onOpenRoles: () -> Unit = {},
     onOpenChats: () -> Unit = {},
 ) {
     Column(
@@ -80,13 +80,13 @@ fun SettingsScreen(
             Divider()
             SettingRow(
                 title = "角色库",
-                subtitle = "新建角色、设定人设、绑定 API",
-                onClick = onOpenCharacters,
+                subtitle = "用户 / 角色，可分组",
+                onClick = onOpenRoles,
             )
             Divider()
             SettingRow(
                 title = "聊天",
-                subtitle = "会话列表与对话",
+                subtitle = "对话 / 联系人 / 发现 / 主页",
                 onClick = onOpenChats,
             )
         }
