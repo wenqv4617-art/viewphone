@@ -1,0 +1,137 @@
+/**
+ * web/probe-web · 把 Kotlin/JS 的 **ESM 生产库产物**装配成一个稳定路径的 npm 包。
+ *
+ * 为什么要这一步（而不是让 pnpm 直接指向 shared/build 里的构建目录）：
+ *   Kotlin/JS 的产物落在 `shared/build/compileSync/js/main/productionLibrary/kotlin/`，
+ *   该路径属于 build 目录（不入库、会被 clean 掉）。Web 端要可靠地 import 它，
+ *   需要一个稳定、可被 pnpm workspace 引用的包目录，因此这里做一次**显式装配**，
+ *   产出 `web/.kernel/`，并把真实来源与内容哈希写进 package.json，便于追溯。
+ *
+ * 本脚本产出的三种消费形态（都保留，作为"TS 侧调用是否别扭"的判断依据）：
+ *   A. `import { kernelVersion } from '@viewphone/shared/kotlin/viewphone-shared.mjs'`
+ *      —— 直接吃 Kotlin 产出的扁平 ESM（零封装，但路径长）
+ *   B. `import { kernel } from '@viewphone/shared'`
+ *      —— 经本脚本生成的 thin adapter（推荐：路径短 + 聚合成一个对象）
+ *   C. `import { com } from '@viewphone/shared/kernel-namespace.mjs'`
+ *      —— 兼容 UMD 时代的 `com.viewphone.shared.api.xxx` 命名空间写法（仅适配层）
+ *
+ * 注意：`index.d.mts` 是**手写**的类型声明文件，随内核导出面变化需同步更新；
+ *       它是 "TS 能否拿到强类型" 的验收载体（不是 any 兜底）。
+ *
+ * 失败语义：任何一步缺失都直接抛错并以非 0 退出（不允许静默产出半个包）。
+ */
+
+import { createHash } from 'node:crypto'
+import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(here, '..', '..', '..')
+const kotlinOut = join(repoRoot, 'shared', 'build', 'compileSync', 'js', 'main', 'productionLibrary', 'kotlin')
+const target = join(repoRoot, 'web', '.kernel')
+
+if (!existsSync(kotlinOut)) {
+  throw new Error(
+    `找不到 Kotlin/JS 生产库产物：${kotlinOut}\n` +
+      `请先执行：./gradlew :shared:compileProductionLibraryKotlinJs`,
+  )
+}
+
+await rm(target, { recursive: true, force: true })
+await mkdir(join(target, 'kotlin'), { recursive: true })
+await cp(kotlinOut, join(target, 'kotlin'), { recursive: true })
+
+// ---- 关键：kotlin/ 目录下必须有自己的 package.json 标记 ESM ----
+// 否则 Node 会把 .js 当 CJS 解析，报 "Unexpected token 'export'"。
+await writeFile(
+  join(target, 'kotlin', 'package.json'),
+  JSON.stringify({ type: 'module' }, null, 2) + '\n',
+  'utf8',
+)
+
+// ---- 生成 thin adapter（形态 B / C）----
+// Kotlin 的顶层导出名，随导出面变化需同步；这里显式列出，缺失会立刻暴露。
+const exportedFns = ['kernelVersion', 'echoTrimmed']
+
+const adapter = `// 由 web/probe-web/scripts/build-kernel.mjs 生成，勿手改。
+// 作用：把 Kotlin/JS 的扁平 ESM 导出，聚合成 Web 端更好用的形态。
+import * as flat from './kotlin/viewphone-shared.mjs'
+
+/** 扁平导出（与 Kotlin 顶层导出一一对应） */
+export const { ${exportedFns.join(', ')} } = flat
+
+/** 聚合对象形态（形态 B） */
+export const kernel = {
+${exportedFns.map((f) => `  ${f}: flat.${f},`).join('\n')}
+}
+
+/** 命名空间形态（形态 C，兼容 UMD 时代的写法） */
+export const com = { viewphone: { shared: { api: kernel } } }
+
+export default kernel
+`
+
+await writeFile(join(target, 'index.mjs'), adapter, 'utf8')
+
+// ---- 手写的强类型声明（形态 B 的验收载体）----
+const dts = `// 由 build-kernel.mjs 一并维护；与 Kotlin 导出面必须一一对应。
+export declare function kernelVersion(): string
+export declare function echoTrimmed(input: string): string
+
+export declare const kernel: {
+  kernelVersion: () => string
+  echoTrimmed: (input: string) => string
+}
+
+export declare const com: {
+  viewphone: { shared: { api: typeof kernel } }
+}
+
+export default kernel
+`
+
+await writeFile(join(target, 'index.d.mts'), dts, 'utf8')
+
+// ---- 内容哈希（可追溯 + 防手改）----
+const files = (await readdir(join(target, 'kotlin'))).filter((f) => !f.endsWith('.map')).sort()
+const hashes = {}
+for (const f of files) {
+  const buf = await readFile(join(target, 'kotlin', f))
+  hashes[f] = createHash('sha256').update(buf).digest('hex').slice(0, 16)
+}
+
+const pkg = {
+  name: '@viewphone/shared',
+  version: '0.0.1-p0',
+  private: true,
+  type: 'module',
+  description: 'Kotlin/JS 共享内核的装配产物（由 web/probe-web/scripts/build-kernel.mjs 生成，勿手改）',
+  exports: {
+    '.': {
+      types: './index.d.mts',
+      import: './index.mjs',
+      default: './index.mjs',
+    },
+    // 形态 A：直接吃 Kotlin 扁平 ESM
+    './kotlin/viewphone-shared.mjs': './kotlin/viewphone-shared.mjs',
+  },
+  viewphoneBuild: {
+    generatedBy: 'web/probe-web/scripts/build-kernel.mjs',
+    sourceDir: 'shared/build/compileSync/js/main/productionLibrary/kotlin',
+    moduleFormat: 'esm',
+    kotlinTopLevelExports: exportedFns,
+    files: hashes,
+  },
+}
+
+await writeFile(join(target, 'package.json'), JSON.stringify(pkg, null, 2) + '\n', 'utf8')
+
+console.log('[build-kernel] 装配完成')
+console.log('  来源:', kotlinOut)
+console.log('  目标:', target)
+console.log('  Kotlin 顶层导出:', exportedFns.join(', '))
+for (const [f, h] of Object.entries(hashes)) {
+  console.log(`  ${f}  sha256:${h}`)
+}

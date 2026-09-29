@@ -1,0 +1,22 @@
+{
+  "name": "@viewphone/probe-web",
+  "version": "0.0.1-p0",
+  "private": true,
+  "type": "module",
+  "description": "R1 验证工程：证明 TypeScript 真的能用上 Kotlin/JS 产出的共享内核（不只是产物存在）",
+  "scripts": {
+    "build:kernel": "node scripts/build-kernel.mjs",
+    "typecheck": "tsc --noEmit",
+    "probe": "node src/probe.ts",
+    "bundle": "node scripts/measure-bundle.mjs",
+    "verify": "node scripts/build-kernel.mjs && node src/probe.ts"
+  },
+  "dependencies": {
+    "@viewphone/shared": "file:../.kernel"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

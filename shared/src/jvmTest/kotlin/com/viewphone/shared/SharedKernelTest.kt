@@ -15,4 +15,14 @@ class SharedKernelTest {
     fun `内核版本可被 JVM 单测断言`() {
         assertEquals("viewphone-shared/0.0.1-p0", SharedKernel.version())
     }
+
+    @Test
+    fun `echoTrimmed 去除首尾空白`() {
+        assertEquals("hello", SharedKernel.echoTrimmed("  hello  "))
+    }
+
+    @Test
+    fun `echoTrimmed 对纯空白输入返回空串`() {
+        assertEquals("", SharedKernel.echoTrimmed("   "))
+    }
 }

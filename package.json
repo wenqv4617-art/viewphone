@@ -1,0 +1,13 @@
+{
+  "name": "viewphone-root",
+  "private": true,
+  "version": "0.0.1-p0",
+  "description": "微光机 ViewPhone 仓库根（仅用于 pnpm workspace 编排，不是可发布包）",
+  "scripts": {
+    "probe:types": "pnpm -C web/probe-web typecheck",
+    "probe:build-kernel": "node web/probe-web/scripts/build-kernel.mjs",
+    "probe:run": "pnpm -C web/probe-web probe",
+    "probe:bundle": "pnpm -C web/probe-web bundle",
+    "probe:all": "pnpm -C web/probe-web run typecheck && pnpm -C web/probe-web run probe && pnpm -C web/probe-web run bundle"
+  }
+}

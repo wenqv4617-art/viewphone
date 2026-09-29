@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    // Node 侧运行时（probe 用 node:assert / console）；DOM 留给将来的 Web 端代码
+    "types": ["node"],
+    "lib": ["ES2022", "DOM"],
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts", "scripts/**/*.mjs"]
+}

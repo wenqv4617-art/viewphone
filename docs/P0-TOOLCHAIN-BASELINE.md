@@ -30,10 +30,11 @@
 | JDK | **OpenJDK 21.0.10**（JetBrains JBR，`D:\AndroidStdio\jbr`） | `java -version` / `javac 21.0.10` |
 | JUnit | **Jupiter 6.1.3** | `:toolchain-probe:jvm-test:test` XML：`tests=1 failures=0 errors=0` |
 | kotlin-test（KMP 默认） | 随 Kotlin 2.4.20 | `:shared:jvmTest` XML：`tests=1 failures=0 errors=0` |
-| Kotlin JS（`js { nodejs() }`） | **2.4.20 已通过** | `:shared:jsTest` → `jsNodeTest` **BUILD SUCCESSFUL in 3m 46s**；`BUILD SUCCESSFUL` |
-| Node 运行环境 | 由 KGP 管理的 **24.16.0**（`kotlinNodeJsSetup` 自动安装） | 报告目录 `.../node-v24.16.0-win-x64`，产物见 §2.3 |
+| Kotlin JS（`js { nodejs() }`） | **2.4.20 已通过** | `:shared:jsTest` → `jsNodeTest` **BUILD SUCCESSFUL in 3m 46s** |
+| Node 运行环境 | 由 KGP 管理并**锁定 `24.16.0`** | 在 `shared/build.gradle.kts` 写死；见 §2.6 |
 | Kotlin JVM toolchain | **21** | `jvmToolchain(21)` 生效，无需额外下载 JDK |
 | Gradle 配置缓存 | **开启且已验证可复用** | `Reusing configuration cache.`（见 `docs/DECISIONS.md` DEC-001） |
+| R1：KMP→JS 被 TypeScript 真实消费 | **可行**（10 项断言 + 类型检查通过） | 见 `docs/DECISIONS.md` **DEC-011** 与 §2.7 |
 
 ### 2.1 `:shared:jvmTest` 实测输出（P0 step 1 门槛）
 
@@ -133,6 +134,53 @@ shared/build/tmp/jsTestPublicPackageJson/package.json
 见 `docs/DECISIONS.md` **DEC-007**（可复用条目，后续每个模块都照此办理）。
 一句话：`src/jvmTest` 目录会被识别，但 `kotlin.test.*` 不会自动可用 —— 不声明必报
 `Unresolved reference 'test'`。加 `js` 后同理，故 `jsTest.dependencies` 也必须写。
+
+### 2.6 Node 版本锁定（口径：不能今天 24.16、明天 CI 拿到别的版本）
+
+KGP 自带的默认 Node 版本**随插件版本变化**，因此已在构建脚本里写死：
+
+```kotlin
+// shared/build.gradle.kts
+extensions.configure<org.jetbrains.kotlin.gradle.targets.js.nodejs.NodeJsEnvSpec>("kotlinNodeJsSpec") {
+    version = "24.16.0"
+}
+```
+
+- 扩展名 `kotlinNodeJsSpec` 取自 Gradle 报错中列出的
+  "Currently registered extension names"（实测，非猜测）。
+- **不要**用 `NodeJsRootExtension.nodeVersion` —— 它已被 `@Deprecated`。
+- 变更此值是**三处联动**：`shared/build.gradle.kts` → 本文件 → `ci.yml`（尚未落地）。
+- 为什么必须锁：`:shared:jsTest` 与 `:shared:compileProductionLibraryKotlinJs` 都依赖
+  `:kotlinNodeJsSetup`；不锁就等于"CI 与本机跑的不是同一个运行时"。
+
+### 2.7 R1 结论：KMP→JS **可行**（详见 `docs/DECISIONS.md` DEC-011）
+
+验收命令与真实结果（三条都 exit 0）：
+
+```bash
+node web/probe-web/scripts/build-kernel.mjs      # 装配内核到 web/.kernel
+pnpm -C web/probe-web run typecheck              # tsc --noEmit → 通过（强类型）
+pnpm -C web/probe-web run probe                  # 真实 import + 调用 → 10 项断言通过
+pnpm -C web/probe-web run bundle                 # 体积实测
+```
+
+**内核 JS 体积（验收项 4）—— 并更正一处此前的误导性数字：**
+
+| 口径 | 字节 | KiB | gzip |
+| :--- | :--- | :--- | :--- |
+| esbuild bundle（未压缩，含 stdlib） | 27,128 | 26.5 | 5.6 KiB |
+| esbuild bundle（**压缩**，含 stdlib） | **9,756** | **9.5** | **3.7 KiB** |
+| 内核产物逐文件合计（未压缩，不含 .map） | 30,308 | 29.6 | — |
+
+> ⚠️ **更正**：此前简报里提到的"kotlin-stdlib 就 620KB"来自
+> `compileSync/js/**test**/testDevelopmentExecutable/kotlin/kotlin-stdlib.js`，
+> 那是 **dev 测试运行器**的拼接产物，**不是生产库产物**。
+> 真实生产产物 + tree-shaking 后是 **gzip 3.7 KiB** 量级。用 620KB 做首屏预算会严重高估。
+> 逐文件占比：stdlib 28,936 B（95.5%）、`viewphone-shared.mjs` 1,248 B（4.1%）、dom-api-compat 124 B。
+
+**导出面（验收项 5）**：当前 **2 个**（`kernelVersion`、`echoTrimmed`），上限 10。
+ESM 下导出是**扁平顶层具名导出**，没有命名空间；命名空间写法由装配层 adapter 提供（形态 C）。
+调用语法评价与最脆环节（手写 `.d.mts` 需三处同步）见 DEC-011 §11.5。
 
 ## 三、Android SDK 现状与**可复现安装**（要求 ②）
 
@@ -307,3 +355,36 @@ JDK 绑定写在**本机** `%USERPROFILE%\.gradle\gradle.properties`：`org.grad
 > 本机另有两个已实测的小坑（与本仓库配置无关，记录备用）：
 > ① `pnpm` 经 PowerShell 会被执行策略拦截，需 `cmd /c pnpm ...`；
 > ② `adb` 不在 PATH（`platform-tools` 目录存在）。
+
+---
+
+## 七、仓库膨胀门禁（CI 必跑）
+
+命令：`node tools/ci/check-repo-bloat.mjs`（加 `--json` 输出机器可读结果）
+
+它把"构建产物 / 依赖目录 / Gradle 缓存 / 密钥文件不得入库"从人工体检变成机器守住的规则。
+两类检查，任一失败即非 0 退出：
+
+| 检查 | 内容 |
+| :--- | :--- |
+| 路径黑名单 | `build/`、`node_modules/`、`.gradle/`、`.buildlogs/`、`dist/`、`local.properties`、`keystore.properties`、`*.jks`、`*.keystore`、`*.apk/*.aab/*.dex`、`*.class/*.aar/*.jar`（仅放行 `gradle/wrapper/gradle-wrapper.jar`）、`*.log`、`*.tsbuildinfo`、`web/.kernel/`、`.bundle-out/` |
+| 体积上限 | 单文件 ≤ **1 MiB**；全仓跟踪体积 ≤ **8 MiB** |
+
+**当前基线（实测）**：跟踪文件 **36** 个，合计 **520,993 字节 = 0.50 MiB**，无违规（exit 0）。
+
+**门禁自证**（证明它真的会红，不是写了没接）：
+```
+# 强制暂存 web/.kernel 后
+node tools/ci/check-repo-bloat.mjs
+  ✗ 发现 8 处违规：
+    - web/.kernel/kotlin/kotlin-kotlin-stdlib.mjs.map  (22262 字节)  原因：内核装配产物（由脚本生成，不入库）
+    - web/.kernel/kotlin/viewphone-shared.mjs  (1248 字节)  原因：内核装配产物（由脚本生成，不入库）
+    ... （逐条列出）
+=== exit code: 1 ===
+# 撤销暂存后恢复 exit code: 0
+```
+
+**顺带修掉的一个真实缺陷**：本轮之前 `web/.kernel/` **并没有**被 `.gitignore` 忽略
+（只靠门禁兜住）。现已加入 `.gitignore`，双保险；已验证
+`git check-ignore -v web/.kernel/package.json` 命中，且 `pnpm-lock.yaml` /
+`kotlin-js-store/yarn.lock` 两个 lockfile **正常入库**（它们是可复现安装的前提，不能忽略）。

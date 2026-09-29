@@ -3,8 +3,9 @@
 //
 // P0 阶段策略（Q2 口径）：**一次只加一个 target**，每步立即验证。
 //   step 1 : jvm()            ← 已通过（:shared:jvmTest 绿）
-//   step 2 : js               ← 当前这一步
-//   step 3 : androidTarget()  ← 失败不阻塞（P4 才真正被 androidApp/feature 依赖）
+//   step 2 : js               ← 已通过（:shared:jsTest 绿）
+//   step 3 : androidLibrary   ← 已通过（compileAndroidMain + AAR 落盘）
+//   step 4 : JS 产物可被 TS 消费 ← 当前这一步（R1 决策点）
 // 理由：KMP 单个 target 配置失败可能拖垮整个模块，逐一引入才能定位问题。
 // ============================================================
 
@@ -26,6 +27,16 @@ kotlin {
     //      正确写法就是 `js { }`。这是编译器实测给出的弃用警告，本文件照此修正。
     js {
         nodejs()
+        // R1 实测（DEC-011）：Kotlin/JS 默认产 **UMD/CJS**，在 ESM 工程里
+        // `import { com } from '@viewphone/shared'` 会直接失败：
+        //   SyntaxError: The requested module ... does not provide an export named 'com'
+        // Web 端是 ESM 世界，因此必须显式切到 ES modules 输出。
+        useEsModules()
+        // 「TS 侧能否拿到类型」是 R1 的验收项之一，必须显式开启：
+        // 默认不生成 .d.ts，TS 就只能弱类型调用（验收要求如实记录这种情况）。
+        generateTypeScriptDefinitions()
+        // 产出可分发的库产物（production 变体），供 Web 端消费。
+        binaries.library()
     }
 
     // ---- step 3：Android target（androidApp / feature:* 消费内核的途径）----
@@ -56,4 +67,19 @@ kotlin {
 // 但 JS 侧用的是 Kotlin 自带的测试框架，不该被强加 JUnit Platform 配置。
 tasks.named<Test>("jvmTest") {
     useJUnitPlatform()
+}
+
+// ============================================================
+// Node 版本锁定（口径：不能今天 24.16、明天 CI 拿到别的版本）
+//
+// KGP 的默认 Node 版本会随插件版本变化，必须在构建脚本里写死。
+// 写法依据（实测）：`NodeJsEnvSpec`（继承 `EnvSpec`）的
+//   `version: Property<String>` 是**非废弃**的现代入口；
+//   NodeJsRootExtension 上的 `nodeVersion` 已被 @Deprecated。
+//   扩展名 `kotlinNodeJsSpec` 由 Gradle 报错里的
+//   "Currently registered extension names: [...]" 直接列出，非猜测。
+// 变更此值时必须同步更新 docs/P0-TOOLCHAIN-BASELINE.md 与 CI 配置。
+// ============================================================
+extensions.configure<org.jetbrains.kotlin.gradle.targets.js.nodejs.NodeJsEnvSpec>("kotlinNodeJsSpec") {
+    version = "24.16.0"
 }

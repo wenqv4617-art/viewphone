@@ -115,31 +115,120 @@
 
 ---
 
-## DEC-008｜仓库解析模式改为 `PREFER_PROJECT`（**护栏降级，必须知悉**）
+## DEC-008｜仓库解析模式 = `PREFER_PROJECT`（**这是 KGP 的现实约束，不是护栏丢失**）
 
 - **日期**：P0 第 1 天（step 2）
-- **状态**：已生效，**代价已认领**
-- **背景**：加入 `js` target 后，`:kotlinNodeJsSetup` 需要解析 `org.nodejs:node:24.16.0`。
-  Kotlin/JS 插件为此会往**项目级** `repositories` 注入 `https://nodejs.org/dist`。
-- **三种配置的实测结果**（不是推测）：
+- **状态**：已生效，**结论已按完整取证修正**
+- **背景**：加入 `js` target 后，`:kotlinNodeJsSetup` 需要解析 `org.nodejs:node:24.16.0`，
+  而 Kotlin/JS 插件会为该依赖**注入一个仓库**。需要确定该仓库的层级，以及它与
+  `repositoriesMode` 的互动。
 
-  | # | `repositoriesMode` | 结果 |
-  | :-- | :--- | :--- |
-  | ① | `FAIL_ON_PROJECT_REPOS` | 构建失败：`repository 'Distributions at https://nodejs.org/dist' was added by unknown code`。把这个仓库声明进 settings **无效**，冲突点是"项目级仓库是否存在" |
-  | ② | `PREFER_SETTINGS` | **更糟**：注入存在时 settings 仓库被整个忽略，解析器链只剩 `[maven, maven2, Google, MavenRepo]`，Node 分发无处可寻 → `Could not find org.nodejs:node:24.16.0`（证据 `.buildlogs/node-debug.log`），**镜像同时失效** |
-  | ③ | `PREFER_PROJECT` | 通过：settings 仓库对 Maven 依赖仍生效（`build2.log` 起 Aliyun 一直在用），Node 分发由 KGP 注入的仓库解析 |
+### 8.1 先回答「仓库声明在哪」——两处，都不是问题所在
 
-  另查证：KGP 2.4.20 **没有**"关闭 Node 下载"的 Gradle 属性/环境变量
-  （jar 内可搜到的开关只有 `kotlin.js.yarn` 等，见 `.buildlogs` 的检索结果），
-  所以"复用宿主 Node"这条路也无法保住①。
-- **结论**：采用 ③。**"所有仓库集中在 settings、模块内不得自建仓库"这条约束，
-  由编译期强制降级为「约定 + review」** —— 该降级已在此明确记录，不隐瞒。
-  Maven 依赖仍然集中在 `settings.gradle.kts`，实际行为未变。
+`settings.gradle.kts` 里我的声明分两块：
+
+| 位置 | 作用 | 声明的仓库 |
+| :--- | :--- | :--- |
+| `pluginManagement.repositories` | 解析**构建插件** | aliyun public / aliyun google / google() / mavenCentral() / gradlePluginPortal() |
+| `dependencyResolutionManagement.repositories` | 解析**依赖**（含 Node 那个） | aliyun public / aliyun google / google() / mavenCentral() |
+
+**`pluginManagement` 里没有任何 Node 仓库**；出问题的是 `dependencyResolutionManagement`
+管辖的解析链，而 KGP 注入的仓库**落在项目级（project-level）**，不在 settings 里。
+判断依据是 Gradle 自己的取名：项目级注入的仓库名为
+**`Distributions at https://nodejs.org/dist`**，而 settings 里的仓库名是
+`maven` / `maven2` / `Google` / `MavenRepo`（见 8.2 实验②的搜索列表）——名字对不上。
+
+### 8.2 两个实验的**完整报错原文**（可复现）
+
+复现：脚本只负责改写 `settings.gradle.kts`（含恢复），**不自己调 Gradle** ——
+因为不同宿主把整条命令行交给 `cmd.exe` 的方式不一样（我们在某个宿主里对
+`cmd /c "gradlew.bat --version"` 直接拿到 exit 9009），把命令交给调用者才能保证取证与宿主无关。
+
+```powershell
+# 1) 切模式（脚本会打印本次的预期失败签名）
+powershell -ExecutionPolicy Bypass -File tools/experiments/repo-mode-evidence.ps1 -Mode FAIL_ON_PROJECT_REPOS
+# 2) 自己跑并留存输出
+.\gradlew.bat :kotlinNodeJsSetup --console=plain
+# 3) 恢复
+powershell -ExecutionPolicy Bypass -File tools/experiments/repo-mode-evidence.ps1 -Restore
+```
+
+两种模式**都已用该流程复现出下面的签名**。原始日志：
+`.buildlogs/exp1-fail-on-project-repos.log`、`.buildlogs/exp2-prefer-settings.log`。
+
+**实验① `FAIL_ON_PROJECT_REPOS`：**
+```
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Could not determine the dependencies of task ':kotlinNodeJsSetup'.
+> Build was configured to prefer settings repositories over project repositories but
+  repository 'Distributions at https://nodejs.org/dist' was added by unknown code
+
+BUILD FAILED in 3s
+```
+
+**实验② `PREFER_SETTINGS`：**
+```
+Build was configured to prefer settings repositories over project repositories but
+repository 'Distributions at https://nodejs.org/dist' was added by unknown code
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Could not determine the dependencies of task ':kotlinNodeJsSetup'.
+> Could not resolve all files for configuration ':detachedConfiguration1'.
+   > Could not resolve all dependencies for configuration ':detachedConfiguration1'.
+      > Could not find org.nodejs:node:24.16.0.
+        Searched in the following locations:
+          - https://maven.aliyun.com/repository/public/org/nodejs/node/24.16.0/node-24.16.0.pom
+          - https://maven.aliyun.com/repository/google/org/nodejs/node/24.16.0/node-24.16.0.pom
+          - https://dl.google.com/dl/android/maven2/org/nodejs/node/24.16.0/node-24.16.0.pom
+          - https://repo.maven.apache.org/maven2/org/nodejs/node/24.16.0/node-24.16.0.pom
+        Required by:
+            root project 'viewphone'
+
+* Try:
+> The project declares repositories, effectively ignoring the repositories you have
+  declared in the settings.
+
+BUILD FAILED in 3s
+```
+
+### 8.3 由原文可确证的四点
+
+1. 两条报错都出现 **"prefer settings repositories over project repositories but repository
+   'Distributions at https://nodejs.org/dist' was added by unknown code"** ——
+   这句只在**项目级仓库与 settings 仓库同时存在**时才会被打印。
+   ⇒ **KGP 注入的 Node 仓库确实是项目级仓库。这个怀疑成立。**
+2. 实验②的 `Searched in the following locations` 里**只有我声明的 4 个仓库**、
+   没有 `nodejs.org` ⇒ 注入的仓库被降级忽略，因此找不到 `org.nodejs:node`。
+3. 实验②的提示语 "The project declares repositories, effectively ignoring the repositories
+   you have declared in the settings" 印证：`PREFER_SETTINGS` 的语义是
+   **"有项目级仓库时忽略 settings 仓库"**（与字面直觉相反，这是它比①更糟的原因）。
+4. 已查证 **KGP 2.4.20 没有关闭 Node 下载的 Gradle 属性或环境变量**
+   （jar 内可检索的 JS 开关只有 `kotlin.js.yarn` 等；`BaseNodeJsRootExtension.download`
+   与 `installationDir` 均 `@Deprecated`，替代入口 `NodeJsEnvSpec` 在当前 `js { nodejs { } }`
+   DSL 里拿不到）。⇒ "复用宿主 Node"这条退路也无法保住①。
+
+### 8.4 修正后的结论（口径要写对）
+
+- **这不是「护栏丢失」，而是 Kotlin/JS 插件在当前版本下的现实约束**：
+  KGP 以项目级仓库方式获取 Node 分发包，而 `FAIL_ON_PROJECT_REPOS` 的定义就是
+  "只要出现项目级仓库就失败"——两者在设计上不可共存。
+- 因此 `PREFER_PROJECT` 是**唯一可用**取值。此前"护栏从编译期强制降级为约定+review"的表述
+  **不够准确**，现更正为：**该模式是外部约束下的唯一选项，不是我们主动放弃护栏。**
+- 我们自己的约束依然成立：**所有 Maven 依赖仍集中在
+  `dependencyResolutionManagement.repositories` 声明，模块内不得自建 `repositories {}`**。
+  这条目前由 review 保证而**没有**构建期兜底 —— **但这属于"我们没做机器强制"，
+  而非"KGP 破坏了我们已有的强制"。**
+
 - **复查点**：
-  1. 若将来 KGP 提供"关闭 Node 下载"的官方开关，或提供把 Node 分发加入 settings 的机制，
-     **立即恢复 `FAIL_ON_PROJECT_REPOS`**，并把本条标记为已偿还。
-  2. review 时必须人工确认没有模块自建 `repositories {}`（现在没有构建期兜底了）。
-  3. 升级 Kotlin 版本时复查本条的三种配置是否仍成立。
+  1. 若将来 KGP 提供把 Node 分发放入 settings 的机制、或关闭 Node 下载的官方开关，
+     复查本条并**优先恢复 `FAIL_ON_PROJECT_REPOS`**（那才是我们真正想要的形态）。
+  2. 升级 Kotlin / Gradle 时复查这两条报错是否仍成立。
+  3. **不要**为了"看起来更严格"把 `RepositoriesMode` 改回 `FAIL_ON_PROJECT_REPOS` ——
+     那会让 `js` target 直接不可用（证据见 8.2）。
 
 ---
 
@@ -212,3 +301,122 @@
   3. 已知无害告警：配置期解析 `jsNpmAggregated` / `jsTestNpmAggregated` 触发 Gradle
      的 "build performance and scalability issue"（上游 issue 2298）。**不影响正确性**，
      但若将来配置期明显变慢，从这里查。
+
+---
+
+## DEC-011｜R1 结论：**KMP→JS 集成可行**（走单实现路线，不启用双实现豁免）
+
+- **日期**：P0 第 1 天（step 4）
+- **状态**：**已结案：可行**
+- **背景**：`CRITICAL §7.6` 与风险 R1 要求 **P0 阶段**就做「hello world 级」KMP→JS 集成验证；
+  不通过则需提前决策走"双实现 + CI 双向一致性测试"的豁免路径（`docs/02 §六`）。
+  验收标准被明确要求"硬到 TS 真的用上了"，不能只看产物存在。
+
+### 11.1 验收结果（全部真实执行，非推断）
+
+| # | 验收项 | 结果 | 证据 |
+| :-- | :--- | :--- | :--- |
+| 1 | 最小 TS 消费工程，pnpm workspace 引用内核 | **通过** | `web/probe-web`（`dependencies: { "@viewphone/shared": "file:../.kernel" }`），`pnpm install` 建立 junction |
+| 2 | 真的 import + 调用 + 断言返回值 | **通过（10 项断言）** | `pnpm -C web/probe-web probe` → exit 0 |
+| 3 | TS 能拿到类型 / `.d.ts` | **通过（强类型，非弱类型）** | `pnpm -C web/probe-web typecheck` → exit 0；`.d.mts` 内有真实签名 |
+| 4 | 内核 JS 体积（含 kotlin-stdlib） | **见 11.3（含对早期数字的更正）** | `pnpm -C web/probe-web bundle` |
+| 5 | 导出面数量与调用语法是否别扭 | **见 11.4 / 11.5** | `web/.kernel/package.json` 的 `viewphoneBuild.kotlinTopLevelExports` 字段 |
+
+`probe` 输出（原文摘录）：
+```
+形态 A · 直接消费 Kotlin 扁平导出
+  ✓ A1 flatVersion() 返回预期版本串
+  ✓ A2 flatEcho() 真的裁剪首尾空白
+形态 B · 经装配层聚合对象（推荐）
+  ✓ B1 导入的 kernel 是对象
+  ✓ B2 kernel.kernelVersion() 返回预期版本串
+  ✓ B3 kernel.echoTrimmed() 真的裁剪首尾空白
+  ✓ B4 纯空白输入返回空串（非恒等返回）
+  ✓ B5 无空白输入原样返回
+  ✓ B6 中文输入正确往返（跨语言边界语义）
+形态 C · 命名空间写法（兼容 UMD 时代）
+  ✓ C1 com.viewphone.shared.api.kernelVersion() 可用
+  ✓ C2 com 命名空间与 kernel 指向同一实现
+```
+
+### 11.2 集成过程中踩到的四个**真实**约束（这才是 R1 的价值）
+
+1. **`@JsExport` 在 `commonMain` 里不可用**。
+   它是 `kotlin.js` 的注解，写在 commonMain 会导致 `:shared:compileKotlinJvm` /
+   `compileAndroidMain` 报 `Unresolved reference 'JsExport'`。
+2. **`@JsExport` 不能标注 `object` 成员**。报错：
+   `'@JsExport' is only allowed on files and top-level declarations.`
+   ⇒ **固定写法：内核实现只有一份（`commonMain` 的 `SharedKernel`），
+   导出面是各平台 `*Main` 里的顶层函数薄包装**（`jsMain` 带 `@JsExport`、`jvmMain` 不带）。
+   这既守住宪法 §二.1（单一实现），也守住 `CRITICAL §7.6`（导出面窄）。
+3. **默认产出是 UMD/CJS，在 ESM 工程里直接不可用**。报错：
+   `SyntaxError: The requested module '@viewphone/shared' does not provide an export named 'com'`。
+   ⇒ 必须显式 `useEsModules()`。开启后产物扩展名也变成 `.mjs` + **`.d.mts`**（不是 `.d.ts`），
+   装配脚本与 `exports.types` 必须跟着改，否则 TS 拿不到类型。
+4. **ESM 下没有命名空间**。Kotlin 的导出变成**扁平顶层具名导出**
+   （`export { kernelVersion, echoTrimmed }`），UMD 时代的
+   `com.viewphone.shared.api.xxx` 形态**不复存在**。⇒ 若产品代码习惯命名空间写法，
+   需要一个薄 adapter（本仓库由装配脚本生成，形态 C）。
+
+### 11.3 体积（验收项 4）——**并更正我此前给出的误导性数字**
+
+我在此前简报里引用过"kotlin-stdlib 就 620KB"。**那个数字是 dev 测试运行器的拼接产物**
+（`compileSync/js/test/testDevelopmentExecutable/kotlin/kotlin-stdlib.js`），
+**不是生产库产物**，用它做首屏预算会严重高估。真实测量如下：
+
+| 口径 | 字节 | KiB | gzip |
+| :--- | :--- | :--- | :--- |
+| esbuild bundle（未压缩，含 stdlib） | 27,128 | 26.5 | 5,783 B = 5.6 KiB |
+| esbuild bundle（**压缩**，含 stdlib） | **9,756** | **9.5** | **3,830 B = 3.7 KiB** |
+| 内核产物逐文件合计（未压缩，不含 .map） | 30,308 | 29.6 | — |
+
+逐文件占比：`kotlin-kotlin-stdlib.mjs` 28,936 B（**95.5%**）、
+`viewphone-shared.mjs` 1,248 B（4.1%）、`kotlin_org_jetbrains_kotlin_kotlin_dom_api_compat.mjs` 124 B（0.4%）。
+
+**结论**：在当前（仅 2 个导出函数）规模下，**gzip 3.7 KiB** 即可接入内核，
+瓶颈确实是 stdlib 但绝对量很小；且 esbuild 能 tree-shake 掉大部分 stdlib
+（未压缩从 620KB 级降到 29.6 KiB 级）。**P1 加入编译器/记忆算法后必须重测**，
+本条数字只对"当前导出面"有效。
+
+### 11.4 导出面登记（验收项 5）
+
+- 当前导出：**2 个**（`kernelVersion`、`echoTrimmed`），上限 10（`CRITICAL §7.6`）。
+- 登记位置：`shared/src/jsMain/.../api/KernelApi.kt` 的 KDoc；
+  装配产物 `web/.kernel/package.json` 的 `viewphoneBuild.kotlinTopLevelExports` 字段也记了一份，
+  便于 CI 比对"声明 vs 实际"。
+
+### 11.5 调用语法评价（如实说，不粉饰）
+
+- 形态 B（推荐，已生成的 adapter）：
+  `import { kernel } from '@viewphone/shared'` → `kernel.kernelVersion()` —— **顺畅**。
+- 形态 A（直接吃 Kotlin 扁平导出）：
+  `import { kernelVersion } from '@viewphone/shared/kotlin/viewphone-shared.mjs'` —— 路径长，但零封装。
+- 形态 C（命名空间）：`com.viewphone.shared.api.kernelVersion()` —— 冗长，仅为兼容习惯保留。
+- **别扭之处**：① 类型是手写 `.d.mts`，**导出面变化时必须同步维护**（不是自动派生）；
+  ② adapter 用的 `export const { a, b } = flat` 在 TS 7 下可用，但它**不携带类型**，
+  类型完全依赖手写 `.d.mts` —— 这是当前方案最脆的一环，已登记为复查点。
+
+### 11.6 **JS vs Wasm 决策（口径钉死）**
+
+- **决定：JS 目标按计划走 Kotlin/JS，不用 Kotlin/Wasm。**
+- 理由：① 本次实测证明 JS 路线**可行且够用**（类型可用、体积 gzip 3.7 KiB）；
+  ② Wasm 会引入额外的 WebAssembly GC 与浏览器兼容性门槛，
+  而 Web 端的使命是**覆盖 iOS 用户**（`docs/01 §2.3`），Safari 的 Wasm 支持面是最需要保守的地方；
+  ③ P0 阶段换栈会推翻刚建立的 KGP/AGP/Gradle 版本基线（DEC-001/003/010 全部要重验）。
+- **重新评估条件（唯一触发条件）**：P1/P6 实测**体积或性能不达标**时重新评估 ——
+  具体阈值待 P1 结束时按"内核 gzip 预算"定稿（届时在本条补上数字）。
+
+### 11.7 结论与后续动作
+
+- **R1 关闭：不走豁免路径。** 单实现（Kotlin 内核 → JS 产物 → TS 消费）成立，
+  因此 `docs/02 §六` 的"双实现 + 一致性测试"**不启用**，
+  `CRITICAL §7.6` 的唯一豁免条件不触发。
+- 后续必须做的两件事：
+  1. **CI 纳入三关**：`typecheck`、`probe`、`bundle`（体积记录，超阈值失败）；
+  2. P1 结束时用真实内核重测 11.3 的体积，并回填 11.6 的重评阈值。
+
+- **复查点**：
+  1. 导出面每次增加，同步更新 `KernelApi.kt` KDoc、装配脚本的 `exportedFns`、
+     手写 `.d.mts` 三处 —— **少改一处 TS 就会静默失去类型**（最脆环节）。
+  2. Kotlin 升级时复查 `useEsModules()` 与 `.d.mts` 命名规则是否变化。
+  3. P6 真机（尤其 iOS Safari）验证前，本条 11.5 的 adapter 形态可能需要再简化。
