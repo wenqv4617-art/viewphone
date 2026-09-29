@@ -52,6 +52,10 @@ const FORBIDDEN = [
 const ALLOWLIST = new Set([
   // Gradle wrapper 的 jar 是仓库的一部分（否则 ./gradlew 不可用）。
   'gradle/wrapper/gradle-wrapper.jar',
+  // 固定 debug 签名：必须入库，否则云端 CI 每次生成不同签名，
+  // 用户已安装的包无法覆盖安装（INSTALL_FAILED_UPDATE_INCOMPATIBLE）。
+  // 它只保护 debug 包，口令 `android` 是公开的；**正式发布签名仍须走 CI Secret**。
+  'androidApp/viewphone-debug.keystore',
 ])
 
 function trackedFiles() {
