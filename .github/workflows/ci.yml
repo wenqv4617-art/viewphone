@@ -63,6 +63,8 @@ jobs:
         run: |
           set -e
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          # 先刷新包列表，否则旧元数据不认识 platforms;android-37（实测）
+          sdkmanager --update > /dev/null 2>&1 || true
           sdkmanager --install "platforms;android-37" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
           test -f "$ANDROID_HOME/platforms/android-37/source.properties"
 
