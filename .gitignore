@@ -13,7 +13,11 @@ local.properties
 # ---- Gradle ----
 .gradle/
 build/
-!gradle/wrapper/gradle-wrapper.jar
+# 注意：必须用 !gradle/wrapper/ 这个前缀式负例。
+# 写成 !gradle/wrapper/gradle-wrapper.jar 是无效的 —— gitignore 无法重新包含
+# 一个「其父目录已被排除」的文件，而且 Gradle 会忽略在「被忽略目录」内的负例规则。
+# 后果：CI 缺少 wrapper jar，./gradlew 直接不可用。
+!gradle/wrapper/
 .kotlin/
 
 # ---- IDE ----
@@ -39,7 +43,10 @@ web/.vite/
 .pnpm-store/
 
 # ---- 共享内核的 JS 产物（由构建生成，不进仓库）----
-shared/build/js/
+# （Gradle 的 build/ 目录已被上面的 build/ 规则覆盖，无需重复列出）
+
+# ---- 本地构建日志（用于留存真实构建输出，不随仓库分发）----
+.buildlogs/
 
 # ---- 生成物中不打进仓库的临时目录 ----
 /tmp/
