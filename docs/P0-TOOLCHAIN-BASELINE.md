@@ -30,6 +30,8 @@
 | JDK | **OpenJDK 21.0.10**（JetBrains JBR，`D:\AndroidStdio\jbr`） | `java -version` / `javac 21.0.10` |
 | JUnit | **Jupiter 6.1.3** | `:toolchain-probe:jvm-test:test` XML：`tests=1 failures=0 errors=0` |
 | kotlin-test（KMP 默认） | 随 Kotlin 2.4.20 | `:shared:jvmTest` XML：`tests=1 failures=0 errors=0` |
+| Kotlin JS（`js { nodejs() }`） | **2.4.20 已通过** | `:shared:jsTest` → `jsNodeTest` **BUILD SUCCESSFUL in 3m 46s**；`BUILD SUCCESSFUL` |
+| Node 运行环境 | 由 KGP 管理的 **24.16.0**（`kotlinNodeJsSetup` 自动安装） | 报告目录 `.../node-v24.16.0-win-x64`，产物见 §2.3 |
 | Kotlin JVM toolchain | **21** | `jvmToolchain(21)` 生效，无需额外下载 JDK |
 | Gradle 配置缓存 | **开启且已验证可复用** | `Reusing configuration cache.`（见 `docs/DECISIONS.md` DEC-001） |
 
@@ -72,6 +74,65 @@ BUILD FAILED in 3s
 === exit code: 1 ===
 ```
 撤销违规后 `:shared:jvmTest` 立即恢复 `BUILD SUCCESSFUL`。
+> 效力边界见 `docs/DECISIONS.md` **DEC-009**：这条门禁与 `CRITICAL §3.3` 的 5 条 Detekt 规则是两件事，
+> Detekt 规则**尚未实现**（P0 第 3 步）。
+
+### 2.3 step 2：`js` target 加入后的实测（P0 step 2 门槛）
+
+命令：`./gradlew :shared:jvmTest :shared:jsTest`
+```
+> Task :shared:compileKotlinJs
+> Task :shared:compileTestKotlinJs
+> Task :shared:compileTestDevelopmentExecutableKotlinJs
+> Task :shared:jsTestTestDevelopmentExecutableCompileSync
+> Task :kotlinNodeJsSetup
+> Task :kotlinYarnSetup
+> Task :kotlinNpmInstall
+> Task :shared:jsNodeTest
+> Task :shared:jsTest
+
+BUILD SUCCESSFUL in 3m 46s
+=== exit code: 0 ===
+```
+> 注意：`jsTest` 是聚合任务，**真实结果 XML 在 `jsNodeTest` 目录下**
+> （`:shared:jsTest` 的 `test-results/jsTest` 目录是空的，别找错地方）。
+
+测试报告的真实路径与内容：
+
+| 源集 | 报告文件 | tests | failures | errors |
+| :--- | :--- | :--- | :--- | :--- |
+| jvm | `shared/build/test-results/jvmTest/TEST-com.viewphone.shared.SharedKernelTest.xml`（类 `SharedKernelTest[jvm]`） | 1 | 0 | 0 |
+| js | `shared/build/test-results/jsNodeTest/TEST-jsNodeTest.com.viewphone.shared.SharedKernelJsSmokeTest.xml`（类 `jsNodeTest.com.viewphone.shared.SharedKernelJsSmokeTest`） | 1 | 0 | 0 |
+
+用例名：`内核版本可被 JVM 单测断言()[jvm]`、`同一份 commonMain 代码在 JS 上可断言[js, node]`。
+
+**JS 产物确实落盘**（以下为实测路径与大小，Windows）：
+
+```
+shared/build/compileSync/js/test/testDevelopmentExecutable/kotlin/viewphone-shared.js        1,493 B   ← 内核 JS 产物
+shared/build/compileSync/js/test/testDevelopmentExecutable/kotlin/viewphone-shared-test.js   3,425 B   ← 测试 JS 产物
+shared/build/compileSync/js/test/testDevelopmentExecutable/kotlin/kotlin-stdlib.js         620,362 B
+shared/build/compileSync/js/test/testDevelopmentExecutable/kotlin/kotlin-test.js            18,486 B
+shared/build/tmp/jsPublicPackageJson/package.json
+shared/build/tmp/jsTestPublicPackageJson/package.json
+```
+`shared/build/compileSync/`、`shared/build/klib/`、`shared/build/kotlin/` 均为 JS target 生成。
+
+**配置缓存三态（加 js target 后的复查，履行 DEC-001 复查点）**：
+
+| 状态 | 命令 | 结果 |
+| :--- | :--- | :--- |
+| 写入 | 删 `.gradle/configuration-cache` 后 `:shared:jvmTest :shared:jsTest --no-build-cache` | `BUILD SUCCESSFUL` + `Configuration cache entry stored.` |
+| 复用 | 再次执行 | **`Reusing configuration cache.`** + `Configuration cache entry reused.` |
+
+> JS 相关的两条坑（`js(IR)` 已废弃；仓库模式与 `FAIL_ON_PROJECT_REPOS` 冲突）见
+> `docs/DECISIONS.md` DEC-008，以及 `shared/build.gradle.kts` 内的注释。
+
+### 2.4 实测教训：KMP 的 test 源集必须显式声明 `kotlin-test`
+
+见 `docs/DECISIONS.md` **DEC-007**（可复用条目，后续每个模块都照此办理）。
+一句话：`src/jvmTest` 目录会被识别，但 `kotlin.test.*` 不会自动可用 —— 不声明必报
+`Unresolved reference 'test'`。加 `js` 后同理，故 `jsTest.dependencies` 也必须写。
 
 ## 三、Android SDK 现状与**可复现安装**（要求 ②）
 
@@ -153,6 +214,30 @@ sdkmanager --install "platforms;android-36"
   本地与 CI 同命令、同镜像、同版本。校验用 `source.properties` 里的 `AndroidVersion.ApiLevel`，
   不依赖任何人工判断。
 - **未验证**：`compileSdk = 36` 能否直接用 `android-36.1` 这个次版本平台（未实测，不作断言）。
+
+### 3.3 CI 上**必须**设置 `ANDROID_HOME`（否则第一次云端构建必失败）
+
+仓库里**没有** `local.properties`（按宪法 §三.6 被 `.gitignore` 排除），
+所以 AGP 拿 SDK 路径只有两条途径：
+
+| 途径 | 本机 | CI |
+| :--- | :--- | :--- |
+| `ANDROID_HOME` / `ANDROID_SDK_ROOT` 环境变量 | 已用（见 §六） | **必须显式设置** |
+| `local.properties` 的 `sdk.dir` | 可选（本机没建） | **禁止**（不能入库，也不该在 CI 里生成） |
+
+> ⚠️ **CI 硬性要求：`ANDROID_HOME` 必须在 workflow 里设置**（由 `android-actions/setup-android`
+> 导出，或显式 `echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV`）。
+> 缺了它，AGP 会在配置阶段直接失败：`SDK location not found. Define a valid SDK location with an
+> ANDROID_HOME environment variable or by setting the sdk.dir path in your project's local.properties file`。
+> 这条必须在第一次推送 `ci.yml` 时就写对，不能等它红了再补。
+
+### 3.4 本机 `cmdline-tools` 缺口（已知、不绕过）
+
+- 现状：本机 SDK 下**没有 `cmdline-tools`**，所以 `sdkmanager` 命令在本机暂时跑不了；
+  平台 36 当时是靠 AGP 自动安装 + 一次手工下载补齐的。
+- **决定**：**不为了"本机一致"而改用不可复现的方式**。CI 一律走 `sdkmanager`；
+  本机缺口单独补装 `cmdline-tools` 后，本地也回到同一条命令。
+  在此之前，本地与 CI 的 SDK 安装路径承认存在差异，并**记录在案**（不当成已解决）。
 
 ### 偏离 2：`.gitignore` 的一处真实 bug 已修
 

@@ -20,8 +20,20 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    // 禁止子模块自建仓库 —— 保证「唯一版本来源 + 唯一仓库来源」
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // 为什么不是 FAIL_ON_PROJECT_REPOS（实测三组合后的结论，别改回去）：
+    //   Kotlin/JS 插件为获取 Node 分发包，会往**项目级** repositories 注入
+    //   `https://nodejs.org/dist`。三种配置的实测结果：
+    //     ① FAIL_ON_PROJECT_REPOS → 直接拒绝注入：
+    //        "...repository 'Distributions at https://nodejs.org/dist' was added by unknown code"
+    //     ② PREFER_SETTINGS       → 更糟：注入的仓库存在时 **settings 仓库被整个忽略**，
+    //        解析器链只剩 [maven, maven2, Google, MavenRepo]，Node 分发无处可寻，
+    //        报错 "Could not find org.nodejs:node:24.16.0"（见 .buildlogs/node-debug.log）
+    //     ③ PREFER_PROJECT（当前）→ settings 仓库对 Maven 依赖仍生效（kwargs 见下），
+    //        Node 分发由 KGP 注入的仓库解析。
+    // 取舍（如实记录）：约束由"编译期强制"降级为"约定 + review"——
+    //   所有 Maven 依赖仍集中在这里声明，模块内不得自建仓库；
+    //   但这条现在**没有**构建期护栏了。见 docs/DECISIONS.md DEC-008。
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
         maven { url = uri("https://maven.aliyun.com/repository/public") }
         maven { url = uri("https://maven.aliyun.com/repository/google") }

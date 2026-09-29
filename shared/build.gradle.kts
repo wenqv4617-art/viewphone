@@ -2,37 +2,44 @@
 // shared · KMP 共享内核（宪法 §二.1：唯一实现，两端共用同一份代码）
 //
 // P0 阶段策略（Q2 口径）：**一次只加一个 target**，每步立即验证。
-//   step 1 : jvm()            ← 当前已在（唯一门槛：:shared:jvmTest 必须绿）
-//   step 2 : js(IR)           ← step 1 通过后再加
-//   step 3 : androidTarget()  ← 失败不阻塞（P4 才真正被 androidApp/feature 依赖），
-//                               完整报错记录为待解决项
+//   step 1 : jvm()            ← 已通过（:shared:jvmTest 绿）
+//   step 2 : js               ← 当前这一步
+//   step 3 : androidTarget()  ← 失败不阻塞（P4 才真正被 androidApp/feature 依赖）
 // 理由：KMP 单个 target 配置失败可能拖垮整个模块，逐一引入才能定位问题。
-//
-// 测试依赖：本轮先用 `src/jvmTest` + kotlin-test（KMP 默认的 JUnit 风格）。
-// commonTest 与 JUnit5 的组合待 step 2 之后单独引入并实测（未验证项，不预先声明）。
 // ============================================================
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
 }
 
-// 测试依赖：显式声明，KMP **不会**自动注入 kotlin-test。
-// 实测教训：只写 `jvm()` 时，`src/jvmTest` 会被识别（任务名即 :shared:jvmTest），
-// 但 `kotlin.test.*` 解析不到 → `Unresolved reference 'test'`。
-// 这里用 sourceSets 的命名访问器（KMP 2.x 推荐写法），不依赖生成的 accessor。
 kotlin {
     // ---- step 1：纯 JVM（内核算法与 golden 测试的宿主）----
     jvm()
 
+    // ---- step 2：JS（Web 端消费同一份内核的唯一途径，宪法 §二.1）----
+    // 注意：Kotlin 2.4.20 起 `js(IR) { }` 已废弃（编译器类型选择被移除，2.6 删掉），
+    //      正确写法就是 `js { }`。这是编译器实测给出的弃用警告，本文件照此修正。
+    js {
+        nodejs()
+    }
+
     jvmToolchain(21)
 
     sourceSets {
+        // 教训（DEC-007）：KMP **不会**自动注入 kotlin-test。
+        // 每新增一个 test 源集都必须显式声明，jvm 已实测，js 同样必须。
         jvmTest.dependencies {
+            implementation(kotlin("test"))
+        }
+        jsTest.dependencies {
             implementation(kotlin("test"))
         }
     }
 }
 
-tasks.withType<Test>().configureEach {
+// 只对 JVM 测试任务指定 JUnit Platform。
+// 不能写成 tasks.withType<Test>() —— KotlinJsTest 虽然也继承 Test，
+// 但 JS 侧用的是 Kotlin 自带的测试框架，不该被强加 JUnit Platform 配置。
+tasks.named<Test>("jvmTest") {
     useJUnitPlatform()
 }

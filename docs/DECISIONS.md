@@ -89,3 +89,73 @@
 - **背景**：`gradle-wrapper.properties` 的 `distributionUrl` 指向 `services.gradle.org`，而 CI 需要可复现的构建。
 - **结论**：Gradle **9.3.0** 通过 wrapper 锁定；本机首次生成 wrapper 时使用的是**已缓存的同一发行版**（离线可行）。
 - **复查点**：CI 首次运行需确认 runner 能下载该发行版；若不能，则改为内置发行版或加镜像（届时更新本条）。
+
+---
+
+## DEC-007｜KMP 的**每个**测试源集都必须显式声明 `kotlin("test")`
+
+- **日期**：P0 第 1 天（step 1 踩到，step 2 复用该结论）
+- **状态**：已生效，**属可复用条目，后续每个模块都照此办理**
+- **背景**：step 1 首次执行 `:shared:jvmTest` 直接失败（`exit code 1`）：
+  ```
+  e: shared/src/jvmTest/.../SharedKernelTest.kt:3:15 Unresolved reference 'test'.
+  ```
+  而 `src/jvmTest` 目录**是被识别的**（任务名就叫 `:shared:jvmTest`），
+  所以问题不是"目录放错"，而是 **KMP 不会自动注入 `kotlin-test` 依赖**。
+- **结论**：每新增一个 test 源集，都必须显式写依赖：
+  ```kotlin
+  sourceSets {
+      jvmTest.dependencies { implementation(kotlin("test")) }
+      jsTest.dependencies  { implementation(kotlin("test")) }
+  }
+  ```
+  jvm 已实测；加 js 后同样必须声明，否则 `:shared:jsTest` 会以同样的方式失败。
+- **复查点**：新增任何 target / 模块时，先检查其 test 源集是否有该声明。
+  这是**机械性**步骤，不要依赖记忆。
+
+---
+
+## DEC-008｜仓库解析模式改为 `PREFER_PROJECT`（**护栏降级，必须知悉**）
+
+- **日期**：P0 第 1 天（step 2）
+- **状态**：已生效，**代价已认领**
+- **背景**：加入 `js` target 后，`:kotlinNodeJsSetup` 需要解析 `org.nodejs:node:24.16.0`。
+  Kotlin/JS 插件为此会往**项目级** `repositories` 注入 `https://nodejs.org/dist`。
+- **三种配置的实测结果**（不是推测）：
+
+  | # | `repositoriesMode` | 结果 |
+  | :-- | :--- | :--- |
+  | ① | `FAIL_ON_PROJECT_REPOS` | 构建失败：`repository 'Distributions at https://nodejs.org/dist' was added by unknown code`。把这个仓库声明进 settings **无效**，冲突点是"项目级仓库是否存在" |
+  | ② | `PREFER_SETTINGS` | **更糟**：注入存在时 settings 仓库被整个忽略，解析器链只剩 `[maven, maven2, Google, MavenRepo]`，Node 分发无处可寻 → `Could not find org.nodejs:node:24.16.0`（证据 `.buildlogs/node-debug.log`），**镜像同时失效** |
+  | ③ | `PREFER_PROJECT` | 通过：settings 仓库对 Maven 依赖仍生效（`build2.log` 起 Aliyun 一直在用），Node 分发由 KGP 注入的仓库解析 |
+
+  另查证：KGP 2.4.20 **没有**"关闭 Node 下载"的 Gradle 属性/环境变量
+  （jar 内可搜到的开关只有 `kotlin.js.yarn` 等，见 `.buildlogs` 的检索结果），
+  所以"复用宿主 Node"这条路也无法保住①。
+- **结论**：采用 ③。**"所有仓库集中在 settings、模块内不得自建仓库"这条约束，
+  由编译期强制降级为「约定 + review」** —— 该降级已在此明确记录，不隐瞒。
+  Maven 依赖仍然集中在 `settings.gradle.kts`，实际行为未变。
+- **复查点**：
+  1. 若将来 KGP 提供"关闭 Node 下载"的官方开关，或提供把 Node 分发加入 settings 的机制，
+     **立即恢复 `FAIL_ON_PROJECT_REPOS`**，并把本条标记为已偿还。
+  2. review 时必须人工确认没有模块自建 `repositories {}`（现在没有构建期兜底了）。
+  3. 升级 Kotlin 版本时复查本条的三种配置是否仍成立。
+
+---
+
+## DEC-009｜工具链探针的效力边界（不许被误读为工程语义）
+
+- **日期**：P0 第 1 天
+- **状态**：已生效
+- **背景**：`toolchain-probe` 与 `shared` 里的那几个断言，容易被后人误读成"已有测试覆盖"。
+- **结论**：
+  1. `toolchain-probe` 的绿**只证明"工具链跑得通"**（编译链、JDK、JUnit、Node 可执行），
+     **不证明任何工程语义**；它那 1 个断言是脚手架，P1 起被编译器的 golden 测试取代。
+  2. `shared/src/jsTest` 里的冒烟断言同样**只证明 JS target 跑得通**，
+     它不是 Web 端一致性测试（那是 P6 的 ≥200 组 `ContextBundle` 逐字节比对），
+     也不覆盖任何内核算法。**禁止**在此处扩展成"看起来像在测功能"的测试。
+  3. **Q1 的依赖门禁与 Detekt 是两件事，不要混为一谈**：
+     - 现在生效的门禁只有一条：*生产模块不得依赖 `toolchain-probe`*（根 `build.gradle.kts`，配置期抛错）；
+     - `CRITICAL §3.3` 要求的 **5 条 Detekt 规则**（跨 feature import、`shared/commonMain` 平台 API、
+       文件 >500 行、函数 >80 行、禁直调 `System.currentTimeMillis()`）**尚未实现**，属 P0 第 3 步。
+- **复查点**：Detekt 落地时，在本文新增条目，并明确它与 Q1 门禁的覆盖范围差异。
