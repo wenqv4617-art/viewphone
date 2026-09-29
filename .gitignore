@@ -1,0 +1,51 @@
+# ============================================================
+# 微光机 ViewPhone · 版本控制忽略清单
+# 宪法 §三.6：密钥不进仓库。本文件是这条纪律的第一道防线。
+# ============================================================
+
+# ---- 密钥与签名（宪法 §三.6，永久禁止项：把密钥/口令写进源码或仓库）----
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+local.properties
+
+# ---- Gradle ----
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.kotlin/
+
+# ---- IDE ----
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+captures/
+
+# ---- Android ----
+*.apk
+*.aab
+*.ap_
+*.dex
+release/
+
+# ---- Web / Node ----
+node_modules/
+web/dist/
+web/.vite/
+*.tsbuildinfo
+.pnpm-store/
+
+# ---- 共享内核的 JS 产物（由构建生成，不进仓库）----
+shared/build/js/
+
+# ---- 生成物中不打进仓库的临时目录 ----
+/tmp/
+*.log
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
