@@ -506,17 +506,20 @@ fun ConversationScreen(vm: AppViewModel, conversationId: String, onBack: () -> U
                 Bubble(m, vm.imageFile(speaker?.avatarPath), speaker?.name)
             }
             if (streaming.isNotEmpty()) {
-                val speaker = vm.store.characterById(conv?.characterIds?.firstOrNull())
-                Bubble(
-                    Message(
-                        id = "streaming",
-                        conversationId = conversationId,
-                        sender = Sender.CHAR,
-                        text = streaming,
-                    ),
-                    vm.imageFile(speaker?.avatarPath),
-                    speaker?.name,
-                )
+                // 注意：LazyListScope 里必须用 item { } 包住，否则 @Composable 不能在非组合作用域调用
+                item(key = "streaming") {
+                    val speaker = vm.store.characterById(conv?.characterIds?.firstOrNull())
+                    Bubble(
+                        Message(
+                            id = "streaming",
+                            conversationId = conversationId,
+                            sender = Sender.CHAR,
+                            text = streaming,
+                        ),
+                        vm.imageFile(speaker?.avatarPath),
+                        speaker?.name,
+                    )
+                }
             }
         }
 
