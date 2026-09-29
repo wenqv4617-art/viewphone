@@ -4,6 +4,11 @@
 # ============================================================
 
 # ---- 密钥与签名（宪法 §三.6，永久禁止项：把密钥/口令写进源码或仓库）----
+# 例外（有意为之，别删）：androidApp/viewphone-debug.keystore 是**固定口令的 debug 签名**，
+# 必须入库——否则云端 CI 每次生成不同签名，用户已装的包无法覆盖安装
+# （INSTALL_FAILED_UPDATE_INCOMPATIBLE）。它只保护 debug 包，口令 `android` 是公开的。
+# **正式发布签名仍然必须走 CI Secret，不得复用这份。**
+!androidApp/viewphone-debug.keystore
 *.jks
 *.keystore
 keystore.properties
