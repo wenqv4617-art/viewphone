@@ -1,21 +1,12 @@
 # ============================================================
-# 微光机 ViewPhone · 云端 CI（**最小骨架，当前未启用**）
+# 微光机 ViewPhone · 门禁 CI（等价于本地 `pnpm verify`）
 #
-# ⚠️ 状态：**本仓库目前没有任何 git remote，本工作流不会被执行。**
-#    在远端落地之前，**当前唯一的门禁是本地 verify**：
-#        pnpm verify                    # 等价于本文件里的全部关卡
-#        pnpm hooks:install             # 装成 pre-push（只作用于本仓库）
-#    文档口径见 docs/CI-STATUS.md。
+# 与本地同源：同一个入口 `tools/verify/verify.mjs`，同样的关卡顺序。
+# 唯一差别：CI 上必须显式准备 Android 工具链（本地是已装好的）。
 #
-# 设计约束（一旦启用必须满足，不要"云端另搞一套"）：
-#   1. **与本地同版本**：Gradle 9.3.0（wrapper） / AGP 9.0.1 / Kotlin 2.4.20 / JDK 21。
-#      本机用的是 Android Studio 自带 JBR21，云端**不是**，因此必须显式 setup-java 21。
-#   2. **与本地同镜像策略**：`settings.gradle.kts` 里已是「aliyun 优先 + 官方兜底」，
-#      云端**必须沿用同一份 files**（本工作流不做任何仓库覆盖），
-#      否则就成了"本地镜像 / 云端官方"两套构建，出问题时本地无法复现。
-#   3. **ANDROID_HOME 必须显式设置**，且 `platforms;android-36` 用 sdkmanager 声明式安装
-#      （本地 `local.properties` 被 gitignore，云端拿不到 sdk.dir）。
-#   4. Node 分发包从 nodejs.org 下载（版本锁定 24.16.0），先跑预检让它"失败得易读"。
+# 实测教训（别改回去）：
+#   ❌ 不要用 android-actions/setup-android@v3 —— 会尝试安装已被移除的 `tools` 包并以 exit 1 结束。
+#   改用 runner 预装 SDK + 其自带 sdkmanager 声明式安装（与 build-apk.yml 一致）。
 # ============================================================
 name: ci
 
@@ -25,27 +16,28 @@ on:
   pull_request:
   workflow_dispatch:
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
+
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 与本地同版本：JDK 21（本机为 JBR21；云端必须显式安装）
-      - name: 安装 JDK 21（Temurin）
+      - name: 安装 JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      # Node 20+：仓根的 verify 与 web 侧工具链需要（与 KGP 下载的内核运行时分属两层）
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
@@ -56,22 +48,23 @@ jobs:
         with:
           version: 12.6.0
 
-      # ANDROID_HOME 由该 action 导出；缺它 AGP 会在配置阶段直接失败（详见 docs 基线 §3.3）
-      - name: 安装 Android SDK 基础组件
-        uses: android-actions/setup-android@v3
-
-      - name: 声明式安装 platform 36（与本地同一条命令）
-        run: sdkmanager --install "platforms;android-36"
-
-      - name: 校验 Android 环境（缺失即早失败，别等 Gradle 报晦涩错误）
+      - name: 探测 Android SDK 与 sdkmanager
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          test -n "$ANDROID_HOME" || (echo "ANDROID_HOME 未设置" && exit 1)
-          grep -E '^AndroidVersion.ApiLevel=36$' "$ANDROID_HOME/platforms/android-36/source.properties"
+          set -e
+          CMDLINE=""
+          for d in "$ANDROID_HOME"/cmdline-tools/*/bin; do
+            if [ -x "$d/sdkmanager" ]; then CMDLINE="$d"; fi
+          done
+          if [ -z "$CMDLINE" ]; then echo "找不到 sdkmanager"; exit 1; fi
+          echo "$CMDLINE" >> "$GITHUB_PATH"
+          "$CMDLINE/sdkmanager" --version
 
-      - name: 校验 Node 分发包可达（外部依赖，失败要易读）
-        run: node tools/ci/check-node-dist-reachable.mjs --version 24.16.0
+      - name: 安装 platforms 与 build-tools
+        run: |
+          set -e
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platforms;android-37" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          test -f "$ANDROID_HOME/platforms/android-37/source.properties"
 
       - name: 缓存 Gradle
         uses: actions/cache@v4
@@ -81,6 +74,8 @@ jobs:
             ~/.gradle/wrapper
             ~/.gradle/nodejs
           key: gradle-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: 缓存 pnpm
         uses: actions/cache@v4
@@ -88,11 +83,11 @@ jobs:
           path: ~/.pnpm-store
           key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
-      - name: 安装 Web 依赖（frozen lockfile，保证可复现）
+      - name: 安装 Web 依赖
         run: pnpm install --frozen-lockfile
 
       # 单一入口：与本地 `pnpm verify` 完全同一套关卡
-      - name: 本地门禁（编译 + 双单测 + 内核装配与导出面校验 + TS 类型 + 真实调用 + 仓库膨胀）
+      - name: 门禁（编译 + 双单测 + 内核 + TS 类型 + 真实调用 + 仓库膨胀）
         run: pnpm verify
 
       - name: 失败时上传日志
@@ -101,5 +96,5 @@ jobs:
         with:
           name: verify-logs
           path: .buildlogs/verify/
+          retention-days: 1
           if-no-files-found: ignore
-          retention-days: 7

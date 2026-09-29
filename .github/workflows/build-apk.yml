@@ -1,26 +1,37 @@
 # ============================================================
 # 微光机 ViewPhone · 构建 debug APK
 #
-# 为什么用云端构建：本机构建 APK 受 AGP/SDK/版本组合限制（记录见 docs/CI-STATUS.md），
-# 云端 runner 环境干净且可以自由装 SDK platform，因此**以本工作流为准**。
+# 为什么用云端构建：本机 Android SDK 与 Gradle/AGP 版本链受限（DEC-019/020），
+# 云端 runner 环境干净，因此**以本工作流为准**。
 #
 # 产物保留：**1 天**（用户明确要求）。
+#
+# 实测教训（别改回去）：
+#   ❌ 不要用 android-actions/setup-android@v3 —— 它会尝试安装已被移除的包 `tools`，
+#      报 "Failed to find package 'tools'" 后以 exit 1 结束（2026-09-29 实测）。
+#   改用 runner 预装的 SDK（/usr/local/lib/android/sdk）+ 其自带 sdkmanager 声明式安装。
 # ============================================================
 name: build-apk
 
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  # runner 预装的 Android SDK（GitHub ubuntu-latest 镜像自带）
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  # 预装 cmdline-tools 的路径随镜像变化，这里在步骤里动态探测并写回 PATH
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
 jobs:
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: 检出代码
@@ -33,19 +44,36 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: 安装 Android SDK 工具
-        uses: android-actions/setup-android@v3
-
-      # 声明式安装所需 platform（与本地同一条命令；不允许手工解压）
-      - name: 安装 platforms;android-36 与 android-37
+      - name: 探测 Android SDK 与 sdkmanager
         run: |
-          sdkmanager --install "platforms;android-36" "platforms;android-37" "build-tools;36.0.0"
-          sdkmanager --list_installed | head -40
+          set -e
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -1 "$ANDROID_HOME" || true
+          echo "--- 找 sdkmanager ---"
+          CMDLINE=""
+          for d in "$ANDROID_HOME"/cmdline-tools/*/bin; do
+            if [ -x "$d/sdkmanager" ]; then CMDLINE="$d"; fi
+          done
+          if [ -z "$CMDLINE" ]; then echo "找不到 sdkmanager"; exit 1; fi
+          echo "SDKMANAGER_DIR=$CMDLINE" >> "$GITHUB_ENV"
+          echo "$CMDLINE" >> "$GITHUB_PATH"
+          "$CMDLINE/sdkmanager" --version
+
+      # 声明式安装所需的 platform / build-tools（与本地同一条命令）
+      - name: 安装 platforms 与 build-tools
+        run: |
+          set -e
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platforms;android-37" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          echo "--- 已安装 ---"
+          ls -1 "$ANDROID_HOME/platforms"
+          ls -1 "$ANDROID_HOME/build-tools"
 
       - name: 校验 Android 环境
         run: |
-          test -n "$ANDROID_HOME" || (echo "ANDROID_HOME 未设置" && exit 1)
-          ls "$ANDROID_HOME/platforms"
+          set -e
+          test -f "$ANDROID_HOME/platforms/android-37/source.properties" || (echo "android-37 未安装" && exit 1)
+          grep -E '^AndroidVersion.ApiLevel=' "$ANDROID_HOME/platforms/android-37/source.properties"
 
       - name: 缓存 Gradle
         uses: actions/cache@v4
@@ -64,7 +92,7 @@ jobs:
       - name: 显示产物
         if: always()
         run: |
-          find androidApp/build/outputs -type f -name '*.apk' -exec ls -lh {} \;
+          ls -la androidApp/build/outputs/apk/debug/ 2>/dev/null || echo "无 apk 产物目录"
 
       - name: 上传 APK（保留 1 天）
         uses: actions/upload-artifact@v4
