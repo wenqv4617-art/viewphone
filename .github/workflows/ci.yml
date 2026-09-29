@@ -2,11 +2,13 @@
 # 微光机 ViewPhone · 门禁 CI（等价于本地 `pnpm verify`）
 #
 # 与本地同源：同一个入口 `tools/verify/verify.mjs`，同样的关卡顺序。
-# 唯一差别：CI 上必须显式准备 Android 工具链（本地是已装好的）。
+# 唯一差别：CI 上必须显式准备 Android 工具链。
 #
 # 实测教训（别改回去）：
-#   ❌ 不要用 android-actions/setup-android@v3 —— 会尝试安装已被移除的 `tools` 包并以 exit 1 结束。
-#   改用 runner 预装 SDK + 其自带 sdkmanager 声明式安装（与 build-apk.yml 一致）。
+#   ❌ android-actions/setup-android@v3 会去装已被移除的 `tools` 包 → exit 1
+#   ❌ `platforms;android-37` 不存在（API 36.1 起包名带次版本号）→ 用 `platforms;android-37.0`
+#   ❌ `gradlew` 缺可执行位 → Linux 上 Permission denied (exit 126)，需 git update-index --chmod=+x
+#   ❌ 校验步骤不能排在安装之前（fresh runner 上必然失败）
 # ============================================================
 name: ci
 
@@ -63,10 +65,27 @@ jobs:
         run: |
           set -e
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          # 先刷新包列表，否则旧元数据不认识 platforms;android-37（实测）
           sdkmanager --update > /dev/null 2>&1 || true
-          sdkmanager --install "platforms;android-37" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
-          test -f "$ANDROID_HOME/platforms/android-37/source.properties"
+          # 真实包名：platforms;android-37.0（`platforms;android-37` 不存在）
+          sdkmanager --install "platforms;android-37.0" "platforms;android-36" "build-tools;36.0.0" "build-tools;37.0.0" "platform-tools"
+          echo "=== 安装后实际内容 ==="
+          for f in "$ANDROID_HOME"/platforms/*/source.properties; do
+            echo "  $(dirname "$f" | xargs basename): $(grep -E '^AndroidVersion.ApiLevel=' "$f")"
+          done
+          ls -1 "$ANDROID_HOME/build-tools"
+
+      # 校验必须排在安装之后
+      - name: 校验 Android 环境
+        run: |
+          set -e
+          found=""
+          for f in "$ANDROID_HOME"/platforms/*/source.properties; do
+            api=$(grep -E '^AndroidVersion.ApiLevel=' "$f" | cut -d= -f2)
+            echo "  $(dirname "$f" | xargs basename): ApiLevel=$api"
+            case "$api" in 37*) found="$f" ;; esac
+          done
+          if [ -z "$found" ]; then echo "没有 ApiLevel 37 的 platform"; exit 1; fi
+          echo "找到 37 平台: $found"
 
       - name: 缓存 Gradle
         uses: actions/cache@v4
