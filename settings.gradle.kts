@@ -32,6 +32,13 @@ dependencyResolutionManagement {
 
 rootProject.name = "viewphone"
 
-// ---- 模块清单（P0 逐步加入；先只放工具链探针，确认基线后再加业务空模块）----
-include(":probe-jvm")
-include(":probe-android")
+// ---- 模块清单（P0 逐步加入）----
+
+// 共享内核：唯一实现，两端共用（CRITICAL §3.1）。P0 只开 jvm target。
+include(":shared")
+
+// ⚠️ 非生产模块：仅用于验证工具链真实可用，不承载业务，不参与交付包。
+//    生产模块禁止依赖它（根 build.gradle.kts 强制校验）。
+//    归宿：core:testing 落地后并入它，不删除。
+include(":toolchain-probe:jvm-test")
+include(":toolchain-probe:android-lib")

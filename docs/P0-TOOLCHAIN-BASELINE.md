@@ -24,28 +24,103 @@
 | 组件 | 版本 | 证据 |
 | :--- | :--- | :--- |
 | Gradle | **9.3.0** | `gradle --version` 输出 + `gradle-wrapper.properties` 的 `distributionUrl` |
-| Android Gradle Plugin | **9.0.1** | 构建日志 `:probe-android:assembleDebug` 成功 |
-| Kotlin（JVM 插件 `org.jetbrains.kotlin.jvm`） | **2.4.20** | `:probe-jvm:compileKotlin` + `:probe-jvm:test` 成功 |
+| Android Gradle Plugin | **9.0.1** | 构建日志 `:toolchain-probe:android-lib:assembleDebug` 成功 |
+| Kotlin（JVM 插件 `org.jetbrains.kotlin.jvm`） | **2.4.20** | `:toolchain-probe:jvm-test:test` 成功 |
+| Kotlin（KMP 插件 `org.jetbrains.kotlin.multiplatform`） | **2.4.20** | `:shared:jvmTest` **BUILD SUCCESSFUL**（P0 step 1 门槛） |
 | JDK | **OpenJDK 21.0.10**（JetBrains JBR，`D:\AndroidStdio\jbr`） | `java -version` / `javac 21.0.10` |
-| JUnit | **Jupiter 6.1.3** | `:probe-jvm:test` 产出 XML：`tests=1 failures=0 errors=0` |
+| JUnit | **Jupiter 6.1.3** | `:toolchain-probe:jvm-test:test` XML：`tests=1 failures=0 errors=0` |
+| kotlin-test（KMP 默认） | 随 Kotlin 2.4.20 | `:shared:jvmTest` XML：`tests=1 failures=0 errors=0` |
 | Kotlin JVM toolchain | **21** | `jvmToolchain(21)` 生效，无需额外下载 JDK |
+| Gradle 配置缓存 | **开启且已验证可复用** | `Reusing configuration cache.`（见 `docs/DECISIONS.md` DEC-001） |
 
-## 三、Android SDK 现状
+### 2.1 `:shared:jvmTest` 实测输出（P0 step 1 门槛）
+
+```
+> Task :shared:compileKotlinJvm
+> Task :shared:jvmJar
+> Task :shared:compileTestKotlinJvm
+> Task :shared:jvmTest
+
+BUILD SUCCESSFUL in 11s
+5 actionable tasks: 3 executed, 2 up-to-date
+Configuration cache entry stored.
+```
+
+真实测试报告（`shared/build/test-results/jvmTest/TEST-com.viewphone.shared.SharedKernelTest.xml`）：
+
+```
+测试类: SharedKernelTest[jvm]
+tests=1 failures=0 errors=0 skipped=0 time=0.027s
+  - 内核版本可被 JVM 单测断言()[jvm]  0.016s
+```
+
+> **实测教训（必须记住）**：KMP **不会**自动注入 `kotlin-test`。只写 `jvm()` 时
+> `src/jvmTest` 目录会被识别（任务名就是 `:shared:jvmTest`），但 `kotlin.test.*` 解析不到
+> （`Unresolved reference 'test'`）。必须在 `sourceSets { jvmTest.dependencies { implementation(kotlin("test")) } }`
+> 里显式声明。首次失败日志见 `.buildlogs/shared-jvmtest.log`。
+
+### 2.2 模块边界门禁自证（探针模块不可被生产模块依赖）
+
+```
+# 故意让 :shared 依赖 :toolchain-probe:jvm-test
+FAILURE: Build failed with an exception.
+* What went wrong:
+A problem occurred configuring project ':shared'.
+> 模块边界违规：生产模块 :shared 依赖了非生产模块 :toolchain-probe:jvm-test。
+  该模块仅用于验证工具链，core:testing 落地后会被并入。请改用 core:testing 等正式模块。
+BUILD FAILED in 3s
+=== exit code: 1 ===
+```
+撤销违规后 `:shared:jvmTest` 立即恢复 `BUILD SUCCESSFUL`。
+
+## 三、Android SDK 现状与**可复现安装**（要求 ②）
 
 | 项 | 值 |
 | :--- | :--- |
 | SDK 根 | `C:\Users\MyAdmin\AppData\Local\Android\Sdk`（由环境变量 `ANDROID_HOME` 提供，**不进仓库**） |
-| platform | `android-34`、`android-36`（本次下载补齐）、`android-36.1` |
+| platform | `android-34`、**`android-36`（本仓库要求，见下）**、`android-36.1` |
 | build-tools | `34.0.0`、`36.1.0`、`37.0.0`，以及 AGP 自动安装的 `36.0.0` |
 | `compileSdk` | **36**（对应 `platforms/android-36`） |
-| `minSdk` | **26**（P0 探针取值，尚未经产品决策确认） |
-| 许可证 | `licenses/android-sdk-license` 已接受（AGP 自动装 Build-Tools 36 时验证通过） |
+| `minSdk` | **26**（已确认，见 `docs/DECISIONS.md` DEC-002） |
+| 许可证 | `licenses/android-sdk-license` 已接受 |
+
+### 3.1 声明式安装（**唯一认可的方式**）
+
+`platforms;android-36` 必须通过 `sdkmanager` 声明式安装，**不许依赖手工解压/展平目录**：
+
+```bash
+sdkmanager --install "platforms;android-36"
+```
+
+- 本地与 CI **使用同一条命令、同一个镜像、同一个版本**，避免行为分叉（要求 ②③）。
+- CI 侧由 `android-actions/setup-android` 提供 `sdkmanager`；**本机目前没有 `cmdline-tools`**
+  （`%LOCALAPPDATA%\Android\Sdk` 下无 `cmdline-tools` 目录），
+  因此本机也是靠 AGP 自动下载补齐的。**待办**：本机补装 `cmdline-tools`，让本地与 CI 完全同路。
+- 校验方式（不依赖任何手工步骤）：
+
+  ```bash
+  grep -E '^AndroidVersion.ApiLevel=36$' "$ANDROID_HOME/platforms/android-36/source.properties"
+  ```
+
+### 3.2 命令与镜像必须双端一致（要求 ③）
+
+| 项 | 本机 | CI 要求 |
+| :--- | :--- | :--- |
+| Gradle | 9.3.0（wrapper 锁定） | 同 |
+| AGP | 9.0.1 | 同 |
+| Kotlin | 2.4.20 | 同 |
+| JDK | JBR 21.0.10 | **必须 JDK 21**（不得用 17 跑出不同行为） |
+| 依赖仓库顺序 | 镜像 → 官方兜底（`settings.gradle.kts`） | **同顺序**（见 `docs/DECISIONS.md` DEC-003） |
+
+> `ci.yml` 落地时必须逐项核对上表，并在本条记录核对结果。
 
 ---
 
 ## 四、两处**必须记录**的环境坑与偏离
 
 ### 坑 1：Maven Central 把大 artifact 302 到 github.com，本机不可达
+
+> 已固化为决策：见 `docs/DECISIONS.md` DEC-003（含 CI 一致性复查点）。
 
 - 现象：`kotlin-compiler-embeddable:2.4.20`（约 58MB）从 `repo.maven.apache.org` 被重定向到
   `github.com/JetBrains/kotlin/releases/download/...`，而 **github.com:443 在本机连接超时** → 首次构建失败。
@@ -59,20 +134,24 @@
   | `repo1.maven.org` 同一 artifact | 302 → github.com（不可用） |
 
 - 处置：`settings.gradle.kts` 中**镜像优先、官方源兜底**，并已写明原因。
-- **待办（属 P0 剩余项）**：CI runner 无此网络限制，但仓库选择需与镜像策略一致；P0 结束前需在 `ci.yml` 里复核。
 
-### 坑 2：Gradle 9.3.0 的配置缓存与 Kotlin 插件 `KotlinCompile` 序列化冲突
+### 坑 2：配置缓存（**结论已更正**）
 
-- 现象：`Configuration cache state could not be cached: ... field __classpathSnapshotProperties__ of task ':probe-jvm:compileKotlin' of type KotlinCompile`。
-- 处置：`gradle.properties` 中 `org.gradle.configuration-cache=false`，并写明原因与重新评估条件。
-  （这意味着构建速度会有损失，属**已知折衷**，不是遗忘。）
+首轮误判为「Gradle 9.3.0 与 Kotlin 插件 `KotlinCompile` 的配置缓存不兼容」，并一度关闭配置缓存。
+经四次复测（含真·从零编译 + 缓存复用）确认：**那是依赖下载失败造成的连带报错，不是插件缺陷**。
+配置缓存现已**开启**并验证可写入、可从零编译、可复用。
 
-### 偏离 1：平台 36 是手工补齐的，本机原本只有 `android-36.1`
+> 完整证据链、结论与复查点见 `docs/DECISIONS.md` **DEC-001**（不可只在本文件省略）。
+
+### 偏离 1：平台 36 的安装方式**已修正为声明式**（要求 ②）
 
 - 事实：`android-36.1` 的 `source.properties` 写着 `AndroidVersion.ApiLevel=36.1`、`Platform.Version=16`；
   它**不是**主版本 36 的平台，`compileSdk = 36` 需要 `platforms/android-36`。
-- 处置：下载 `platform-36_r02.zip`（65,878,410 字节）解压到 `platforms/android-36`。
-  下载包内层多一层 `android-36/` 目录，已展平（否则 `source.properties` 位置不对，AGP 认不出）。
+- **首轮做法（已废弃）**：手工下载 `platform-36_r02.zip` 并手工展平目录。
+  手工步骤不可复现、会与 CI 分叉，且本机 `cmdline-tools` 缺失导致 `sdkmanager` 尚不可用。
+- **修正后的口径**：统一用 `sdkmanager --install "platforms;android-36"`（见 §3.1），
+  本地与 CI 同命令、同镜像、同版本。校验用 `source.properties` 里的 `AndroidVersion.ApiLevel`，
+  不依赖任何人工判断。
 - **未验证**：`compileSdk = 36` 能否直接用 `android-36.1` 这个次版本平台（未实测，不作断言）。
 
 ### 偏离 2：`.gitignore` 的一处真实 bug 已修
@@ -88,13 +167,14 @@
 
 | # | 事项 | 状态 |
 | :-- | :--- | :--- |
-| 1 | KMP 插件（`org.jetbrains.kotlin.multiplatform`）2.4.20 + AGP 9.0.1 能否共存 | **未验证**（P0 下一步：`shared` 模块） |
+| 1 | KMP 插件（`org.jetbrains.kotlin.multiplatform`）2.4.20 + AGP 9.0.1 共存 | **部分验证**：`jvm()` target 已通过；`androidTarget()` **未验证**（step 3） |
 | 2 | AGP 9 是否支持/要求 `compileSdkMinor` 概念 | **未验证** |
-| 3 | AGP 9 是否有内置 Kotlin 支持（本次 Android 模块的 Kotlin 编译由 KGP 完成，非 AGP 内置） | **未验证** |
+| 3 | AGP 9 是否有内置 Kotlin 支持 | **有实测线索**：`toolchain-probe:android-lib` 未应用任何 Kotlin 插件，AGP 仍编译了 `.kt`。**未做对照实验**，不作为结论 |
 | 4 | Detekt 1.23.8 在 Gradle 9.3.0 上可用性、自定义规则 API 稳定性 | **未验证**（P0 第 3 步） |
-| 5 | Compose BOM / Room / Ktor 等版本（尚未加入 `libs.versions.toml`） | **未加入**（P1/P2 需要时再加并实测） |
-| 6 | JS 目标（KMP→JS hello world，B1 附加项） | **未开始** |
-| 7 | `probe-android` 的 Kotlin 编译走的是 `kotlin.jvm` 插件而非 kotlin-android | 待 `shared` 落地时统一 |
+| 5 | Compose BOM / Room / Ktor 等版本 | **未加入** `libs.versions.toml`（需要时再加并实测） |
+| 6 | `js(IR)` target（P0 step 2）+ KMP→JS hello world（B1 附加项） | **未开始** |
+| 7 | JUnit5 与 KMP `commonTest` 的组合方式 | **未验证**（当前只用 `jvmTest` + kotlin-test） |
+| 8 | 本机 `cmdline-tools` 缺失，`sdkmanager` 命令尚不可用 | **待补装**（见 §3.1） |
 
 ---
 
