@@ -10,6 +10,11 @@
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
+    // AGP 9 起，KMP 的 Android target 必须用这个专用插件：
+    //   'com.android.library' 与 'org.jetbrains.kotlin.multiplatform' 自 AGP 9.0 起**不兼容**
+    //   （实测报错见 docs/DECISIONS.md DEC-010），官方推荐即本插件。
+    // 注意：这里**不带版本**（版本已在根 build.gradle.kts 用 apply false 固定）。
+    id("com.android.kotlin.multiplatform.library")
 }
 
 kotlin {
@@ -21,6 +26,15 @@ kotlin {
     //      正确写法就是 `js { }`。这是编译器实测给出的弃用警告，本文件照此修正。
     js {
         nodejs()
+    }
+
+    // ---- step 3：Android target（androidApp / feature:* 消费内核的途径）----
+    // 用 `androidLibrary {}` 而不是旧的 `androidTarget()`：
+    // AGP 9 + KMP 的官方 DSL 就是这个，`androidTarget()` 属已被取代的旧路径。
+    androidLibrary {
+        namespace = "com.viewphone.shared"
+        compileSdk = 36
+        minSdk = 26 // 见 docs/DECISIONS.md DEC-002
     }
 
     jvmToolchain(21)

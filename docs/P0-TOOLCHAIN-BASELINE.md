@@ -252,14 +252,42 @@ sdkmanager --install "platforms;android-36"
 
 | # | 事项 | 状态 |
 | :-- | :--- | :--- |
-| 1 | KMP 插件（`org.jetbrains.kotlin.multiplatform`）2.4.20 + AGP 9.0.1 共存 | **部分验证**：`jvm()` target 已通过；`androidTarget()` **未验证**（step 3） |
-| 2 | AGP 9 是否支持/要求 `compileSdkMinor` 概念 | **未验证** |
-| 3 | AGP 9 是否有内置 Kotlin 支持 | **有实测线索**：`toolchain-probe:android-lib` 未应用任何 Kotlin 插件，AGP 仍编译了 `.kt`。**未做对照实验**，不作为结论 |
-| 4 | Detekt 1.23.8 在 Gradle 9.3.0 上可用性、自定义规则 API 稳定性 | **未验证**（P0 第 3 步） |
+| 1 | KMP 插件（`org.jetbrains.kotlin.multiplatform`）2.4.20 + AGP 9.0.1 共存 | **已验证**：jvm / js / android 三个 target 全部编译通过（见 §2.5） |
+| 2 | AGP 9 是否支持/要求 `compileSdkMinor` 概念 | **未验证**（`compileSdk = 36` 用 `platforms/android-36` 已够用） |
+| 3 | AGP 9 是否有内置 Kotlin 支持 | **已证实**：AGP 9 报错中点名 `android.builtInKotlin`，且它与 KMP 互斥（DEC-010） |
+| 4 | Detekt 1.23.8 在 Gradle 9.3.0 上可用性、自定义规则 API 稳定性 | **未验证**（P0 第 3 步，5 条规则尚未实现） |
 | 5 | Compose BOM / Room / Ktor 等版本 | **未加入** `libs.versions.toml`（需要时再加并实测） |
-| 6 | `js(IR)` target（P0 step 2）+ KMP→JS hello world（B1 附加项） | **未开始** |
-| 7 | JUnit5 与 KMP `commonTest` 的组合方式 | **未验证**（当前只用 `jvmTest` + kotlin-test） |
-| 8 | 本机 `cmdline-tools` 缺失，`sdkmanager` 命令尚不可用 | **待补装**（见 §3.1） |
+| 6 | `js` target 与 KMP→JS hello world（B1 附加项） | js target **已完成**；`web/src/kernel` 调用验证**未开始** |
+| 7 | JUnit5 与 KMP `commonTest` 的组合方式 | **未验证**（当前用 `jvmTest` + kotlin-test、`jsTest` + kotlin-test） |
+| 8 | 本机 `cmdline-tools` 缺失，`sdkmanager` 命令尚不可用 | **待补装**（见 §3.1、§3.4） |
+
+### 2.5 step 3：Android target 加入后的实测（三个 target 并存）
+
+```
+> Task :shared:compileAndroidMain
+> Task :shared:bundleAndroidMainAar
+> Task :shared:assembleAndroidMain
+BUILD SUCCESSFUL in 18s
+112 actionable tasks: 102 executed, 4 from cache, 6 up-to-date
+```
+`./gradlew :shared:jvmTest :shared:jsTest build` → `exit code: 0`。
+
+三份产物并存（实测路径与大小）：
+
+| target | 产物 |
+| :--- | :--- |
+| android | `shared/build/outputs/aar/shared.aar`（1,590 B）、`shared/build/classes/kotlin/android/main/com/viewphone/shared/SharedKernel.class`（848 B） |
+| jvm | `shared/build/classes/kotlin/jvm/main/com/viewphone/shared/SharedKernel.class`（848 B） |
+| js | `shared/build/compileSync/js/test/testDevelopmentExecutable/kotlin/viewphone-shared.js`（1,493 B）+ `.map` |
+
+测试报告：jvm `tests=1 failures=0 errors=0`；js `tests=1 failures=0 errors=0`。
+
+配置缓存三态（三 target 加入后复查，履行 DEC-001 复查点）：
+写入 `Configuration cache entry stored.` → 复用 **`Reusing configuration cache.`**。
+
+> Android target 的旧 DSL（`com.android.library` + `androidTarget()`）**已被 AGP 9 封死**，
+> 完整报错与最终可用写法见 `docs/DECISIONS.md` **DEC-010** ——
+> 这一条同时证实了上表中第 3 项的「AGP 9 内置 Kotlin 支持」。
 
 ---
 

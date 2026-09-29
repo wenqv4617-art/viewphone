@@ -29,6 +29,9 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 [plugins]
 # 只列 P0 真实应用过的插件；其余（Detekt / Compose 等）在引入时再加。
 android-library = { id = "com.android.library", version.ref = "agp" }
+# KMP 的 Android target 专用插件（AGP 9 起取代 `com.android.library` + `androidTarget()`
+# 的旧组合，见 docs/DECISIONS.md DEC-010）
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 # KMP：shared 模块使用（P0 先只开 jvm target，见 shared/build.gradle.kts 的分步策略）
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

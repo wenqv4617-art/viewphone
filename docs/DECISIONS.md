@@ -159,3 +159,56 @@
      - `CRITICAL §3.3` 要求的 **5 条 Detekt 规则**（跨 feature import、`shared/commonMain` 平台 API、
        文件 >500 行、函数 >80 行、禁直调 `System.currentTimeMillis()`）**尚未实现**，属 P0 第 3 步。
 - **复查点**：Detekt 落地时，在本文新增条目，并明确它与 Q1 门禁的覆盖范围差异。
+
+---
+
+## DEC-010｜KMP 的 Android target 必须用 `com.android.kotlin.multiplatform.library`（旧 DSL 已被 AGP 9 封死）
+
+- **日期**：P0 第 1 天（step 3）
+- **状态**：**已解决**（原按"失败不阻塞"挂账，实测过程中当场解决）
+- **背景**：Q2 口径要求 step 3 先试旧路径，失败则记录完整报错为待解决。
+- **实测报错（原文，非转述）**：
+  ```
+  > An exception occurred applying plugin request [id: 'com.android.library', version: '9.0.1']
+    > Failed to apply plugin 'com.android.internal.library'.
+       > The 'com.android.library' (or 'com.android.application') plugin is not compatible
+         with the 'org.jetbrains.kotlin.multiplatform' plugin since AGP 9.0.
+         Solution:
+           - [Recommended] Replace the 'com.android.library' plugin with the
+             'com.android.kotlin.multiplatform.library' plugin
+           - Or set the Gradle property 'android.builtInKotlin=false' and
+             'android.newDsl=false' to temporarily bypass this issue.
+  ```
+- **是否与 KGP/AGP 9 的已知 DSL 迁移相关**：**是，直接相关**。AGP 9 做了两项改动共同导致：
+  ① `builtInKotlin`（AGP 自带 Kotlin 支持）与 KMP 的 Kotlin 编译互斥；
+  ② `newDsl`。官方给出的临时绕过方式正是把这两项关掉，说明旧组合并未被删掉，只是不再被默认允许。
+- **解决过程（三个报错，逐个消掉）**：
+  1. `com.android.library` + `androidTarget()` → 上面的不兼容报错；
+  2. 换成 `com.android.kotlin.multiplatform.library` 且**在子模块里带版本号** →
+     `Error resolving plugin ...: the plugin is already on the classpath with an unknown version`
+     （AGP 9 已把该插件带上 classpath）；
+  3. **最终可用写法**：根 `build.gradle.kts` 用 `alias(...) apply false` 固定版本一次，
+     子模块只写 `id("com.android.kotlin.multiplatform.library")`（**不带版本**），
+     target 配置用 `kotlin { androidLibrary { namespace/compileSdk/minSdk } }`。
+- **结论**：**没有走例外路径**（未设置 `android.builtInKotlin=false` / `android.newDsl=false`），
+  直接采用官方推荐的新插件与新 DSL。
+- **实测证据**：
+  ```
+  > Task :shared:compileAndroidMain
+  > Task :shared:bundleAndroidMainAar
+  > Task :shared:assembleAndroidMain
+  BUILD SUCCESSFUL in 18s
+  112 actionable tasks: 102 executed, 4 from cache, 6 up-to-date
+  ```
+  产物落盘：`shared/build/outputs/aar/shared.aar`（1,590 B）、
+  `shared/build/classes/kotlin/android/main/com/viewphone/shared/SharedKernel.class`（848 B），
+  与 jvm / js 三份产物并存（`build/classes/kotlin/{android,js,jvm,metadata}`）。
+- **顺带被证实的既有「未验证项」**：**AGP 9 确有内置 Kotlin 支持**（报错里点名 `android.builtInKotlin`）。
+  这同时解释了 `toolchain-probe:android-lib` 为何未加 Kotlin 插件也能编译 `.kt`。
+- **复查点**：
+  1. 升级 AGP / Kotlin 时复查插件 id 与 DSL 是否再次变更（AGP 9.x 系列仍在演进）。
+  2. `androidLibrary {}` 里目前只配了 `namespace/compileSdk/minSdk`；
+     加入 Compose、单元测试（`withHostTest`）、变体等能力时需按新 DSL 重新确认写法。
+  3. 已知无害告警：配置期解析 `jsNpmAggregated` / `jsTestNpmAggregated` 触发 Gradle
+     的 "build performance and scalability issue"（上游 issue 2298）。**不影响正确性**，
+     但若将来配置期明显变慢，从这里查。
