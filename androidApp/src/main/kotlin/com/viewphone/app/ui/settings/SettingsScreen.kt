@@ -27,13 +27,18 @@ import androidx.compose.ui.unit.sp
 import com.viewphone.app.ui.theme.VpColors
 
 /**
- * 设置页（本轮为分组列表骨架）。
+ * 设置页（分组列表）。
  *
- * 本轮已实现：进入页面 + 分组结构 + API 配置入口占位。
- * 下一批接：API 预设 CRUD + 测试连接；再后接：数据管理 / 世界书 / 调试面板。
+ * 本轮已接：API 配置（可用的预设 CRUD + 测试连接）、角色库、聊天入口。
+ * 未接的项保持占位，点击暂无动作（不做假跳转）。
  */
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onOpenApiConfig: () -> Unit = {},
+    onOpenCharacters: () -> Unit = {},
+    onOpenChats: () -> Unit = {},
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -70,7 +75,19 @@ fun SettingsScreen(onBack: () -> Unit) {
             SettingRow(
                 title = "API 配置",
                 subtitle = "多套预设 · 按角色绑定 · 测试连接",
-                onClick = { /* 下一批接 */ },
+                onClick = onOpenApiConfig,
+            )
+            Divider()
+            SettingRow(
+                title = "角色库",
+                subtitle = "新建角色、设定人设、绑定 API",
+                onClick = onOpenCharacters,
+            )
+            Divider()
+            SettingRow(
+                title = "聊天",
+                subtitle = "会话列表与对话",
+                onClick = onOpenChats,
             )
         }
 

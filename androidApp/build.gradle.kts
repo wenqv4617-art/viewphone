@@ -12,6 +12,7 @@ plugins {
     //   "Failed to apply plugin 'org.jetbrains.kotlin.android' ... Remove the plugin"
     // 这与 DEC-010 记录的 KMP 情况同源。
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -49,6 +50,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.security.crypto)
+
+    // 第 1 轮业务所需（catalog 早已列好，此处正式接入）
+    implementation(libs.okhttp)                   // HTTP + SSE 流式
+    implementation(libs.kotlinx.serialization.json) // 强类型 JSON，禁止手拼字符串
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
