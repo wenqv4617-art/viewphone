@@ -4,10 +4,14 @@
   "version": "0.0.1-p0",
   "description": "微光机 ViewPhone 仓库根（仅用于 pnpm workspace 编排，不是可发布包）",
   "scripts": {
-    "probe:types": "pnpm -C web/probe-web typecheck",
+    "verify": "node tools/verify/verify.mjs",
+    "verify:fast": "node tools/verify/verify.mjs --only=typecheck,probe,bloat",
+    "hooks:install": "node tools/verify/install-hooks.mjs",
+    "hooks:uninstall": "node tools/verify/install-hooks.mjs --uninstall",
+    "bloat": "node tools/ci/check-repo-bloat.mjs",
     "probe:build-kernel": "node web/probe-web/scripts/build-kernel.mjs",
-    "probe:run": "pnpm -C web/probe-web probe",
-    "probe:bundle": "pnpm -C web/probe-web bundle",
-    "probe:all": "pnpm -C web/probe-web run typecheck && pnpm -C web/probe-web run probe && pnpm -C web/probe-web run bundle"
+    "probe:types": "pnpm -C web/probe-web run typecheck",
+    "probe:run": "pnpm -C web/probe-web run probe",
+    "probe:bundle": "pnpm -C web/probe-web run bundle"
   }
 }

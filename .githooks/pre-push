@@ -1,0 +1,47 @@
+#!/bin/sh
+# ============================================================
+# 微光机 ViewPhone · pre-push 钩子
+#
+# 作用：推送前跑本地门禁（tools/verify/verify.mjs），失败即阻止推送。
+# 为什么需要它：本仓库目前**没有 git remote**，云端 CI 触发不了；
+#   在远端落地之前，本地 verify 就是当前唯一的门禁。
+#
+# 安装（只作用于本仓库，不改全局配置）：
+#   git config --local core.hooksPath .githooks
+#   chmod +x .githooks/pre-push          # Windows 上可跳过
+# 卸载：
+#   git config --local --unset core.hooksPath
+#
+# 说明：
+#   - 若本仓库已有**自己的** pre-push（无论 core.hooksPath 指向哪），
+#     安装脚本会拒绝覆盖，并提示你手动合并。见 tools/verify/install-hooks.mjs
+#   - 跳过本次检查：git push --no-verify（应急用，请勿常态使用）
+# ============================================================
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$REPO_ROOT" ]; then
+  echo "[pre-push] 无法定位仓库根，跳过门禁" >&2
+  exit 0
+fi
+
+cd "$REPO_ROOT"
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "[pre-push] 找不到 node，跳过门禁（请安装 Node 20+）" >&2
+  exit 0
+fi
+
+echo "[pre-push] 运行本地门禁 verify（推送前必须全绿；应急可用 git push --no-verify 跳过）"
+node tools/verify/verify.mjs
+status=$?
+
+if [ "$status" -ne 0 ]; then
+  echo "" >&2
+  echo "[pre-push] ✗ 门禁未通过，推送已被阻止。" >&2
+  echo "[pre-push]   日志在 .buildlogs/verify/ 下；修好后重新 push。" >&2
+  exit "$status"
+fi
+
+echo "[pre-push] ✓ 门禁通过，继续推送"
+exit 0

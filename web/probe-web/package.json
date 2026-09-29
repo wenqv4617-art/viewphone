@@ -7,9 +7,9 @@
   "scripts": {
     "build:kernel": "node scripts/build-kernel.mjs",
     "typecheck": "tsc --noEmit",
-    "probe": "node src/probe.ts",
+    "probe": "node scripts/run-probe.mjs",
     "bundle": "node scripts/measure-bundle.mjs",
-    "verify": "node scripts/build-kernel.mjs && node src/probe.ts"
+    "verify": "node scripts/build-kernel.mjs && node scripts/run-probe.mjs"
   },
   "dependencies": {
     "@viewphone/shared": "file:../.kernel"

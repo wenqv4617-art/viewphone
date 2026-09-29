@@ -55,6 +55,68 @@ await writeFile(
 // Kotlin 的顶层导出名，随导出面变化需同步；这里显式列出，缺失会立刻暴露。
 const exportedFns = ['kernelVersion', 'echoTrimmed']
 
+// ============================================================
+// 机器校验：Kotlin 生成的 .d.mts 导出集合 == 装配层声明的导出集合
+//
+// 为什么必须有它：`.d.mts` 由 Kotlin 生成、adapter 的导出名由本脚本硬编码，
+// 两者一旦漂移，TS 侧会**静默失去类型或拿到不存在的符号**（priblem 只在运行时才暴露）。
+// 验收要求明确写着"不允许靠人记得同步"，所以这里做成硬失败。
+//
+// 实现（Kotlin 2.4.20 ESM 实际产物形态，已实测）：
+//   export declare function kernelVersion(): string;
+//   export declare function echoTrimmed(input: string): string;
+// 即"扁平顶层具名导出"，没有命名空间包装。
+// ============================================================
+const dtsPath = join(target, 'kotlin', 'viewphone-shared.d.mts')
+const dtsLegacyPath = join(target, 'kotlin', 'viewphone-shared.d.ts')
+const actualDtsPath = existsSync(dtsPath) ? dtsPath : dtsLegacyPath
+if (!existsSync(actualDtsPath)) {
+  throw new Error(
+    `找不到 Kotlin 生成的类型声明（已找 ${dtsPath} 与 ${dtsLegacyPath}）。\n` +
+      `请确认 shared/build.gradle.kts 里 js { generateTypeScriptDefinitions() } 已开启并重新构建。`,
+  )
+}
+
+const dtsText = await readFile(actualDtsPath, 'utf8')
+const declared = new Set()
+for (const m of dtsText.matchAll(/export\s+declare\s+(?:function|const|let|var|class|abstract class)\s+([A-Za-z_$][\w$]*)/g)) {
+  declared.add(m[1])
+}
+// `export { a, b }` 形式（不同 Kotlin 版本可能产生）
+for (const m of dtsText.matchAll(/export\s*\{([^}]*)\}/g)) {
+  for (const part of m[1].split(',')) {
+    const name = part.trim().split(/\s+as\s+/).pop()?.trim()
+    if (name && /^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name)
+  }
+}
+
+const declaredSorted = [...declared].sort()
+const expectedSorted = [...exportedFns].sort()
+const expectedSet = new Set(expectedSorted)
+
+const missingInJs = expectedSorted.filter((n) => !declared.has(n))
+const missingInAdapter = declaredSorted.filter((n) => !expectedSet.has(n))
+
+if (missingInJs.length > 0 || missingInAdapter.length > 0) {
+  const lines = [
+    '导出面不一致（机器校验失败）—— 不要靠人记得同步，请修正后再提交：',
+    `  Kotlin 生成的类型声明: ${actualDtsPath}`,
+    `  声明中实际导出 (${declaredSorted.length}): ${declaredSorted.join(', ') || '(无)'}`,
+    `  装配层声明导出 (${expectedSorted.length}): ${expectedSorted.join(', ') || '(无)'}`,
+  ]
+  if (missingInJs.length > 0) {
+    lines.push(`  ✗ 装配层声明了但 Kotlin 未导出: ${missingInJs.join(', ')}`)
+    lines.push('     → 检查 shared/src/jsMain 里是否漏了 @JsExport 或函数名拼写。')
+  }
+  if (missingInAdapter.length > 0) {
+    lines.push(`  ✗ Kotlin 已导出但装配层未登记: ${missingInAdapter.join(', ')}`)
+    lines.push('     → 把新入口加进本脚本的 exportedFns，并同步 index.d.mts 与 KDoc 的导出面登记。')
+  }
+  throw new Error(lines.join('\n'))
+}
+
+console.log(`[build-kernel] 导出面校验通过：${declaredSorted.length} 个（${declaredSorted.join(', ')}）`)
+
 const adapter = `// 由 web/probe-web/scripts/build-kernel.mjs 生成，勿手改。
 // 作用：把 Kotlin/JS 的扁平 ESM 导出，聚合成 Web 端更好用的形态。
 import * as flat from './kotlin/viewphone-shared.mjs'
